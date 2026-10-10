@@ -4,6 +4,8 @@ A GitHub Action that measures lab web vitals (LCP, FCP, CLS, TBT, TTFB, optional
 on your main branch's preview, back to back in the same job. It runs a significance test on the difference and comments on
 the PR only about changes larger than run-to-run noise. It never fails your build unless you ask it to.
 
+<img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main. LCP on / went from 802 ms to 1.33 s after the first byte, +533 ms." width="616">
+
 ## Quick start
 
 You need a preview URL for each PR and one for main. Add this job after the job that deploys the PR preview:
@@ -13,6 +15,7 @@ You need a preview URL for each PR and one for main. Add this job after the job 
     needs: deploy-preview
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - uses: WillSmithTE/leboost-pr-checks@v1
@@ -26,15 +29,15 @@ That is the whole setup. The first run posts a comment on the PR, and every late
 result is also in the job summary.
 
 Recipes for common hosts are below: [Cloudflare](#cloudflare-workers-and-pages), [Vercel](#vercel),
-[Netlify](#netlify) and [GitHub Pages](#github-pages).
+[Netlify](#netlify) and [static sites without previews](#a-static-site-without-previews).
 
 ## What it reports
 
-- The comment's title is the answer: "no significant change vs main", "1 regression vs main", "2 regressions, 1 improvement
+- The comment's title states the result: "no significant change vs main", "1 regression vs main", "2 regressions, 1 improvement
   vs main".
 - Each regression or improvement gets one line with the metric, the page and the size of the change.
 - When nothing moved, one line says what a run of this size can still miss, for example "an LCP change under 110 ms".
-- Failed loads, and pages or metrics without enough good loads, are listed rather than left out.
+- Failed loads, and pages or metrics without enough good loads, are listed too.
 - A table with every metric per page, folded away unless something regressed.
 
 The [demo repository](https://github.com/WillSmithTE/leboost-pr-checks-demo/pulls?q=is%3Apr) has a PR with a deliberate
@@ -72,7 +75,7 @@ slow hero image and a PR that changes nothing, with the comments this action pos
       - uses: WillSmithTE/leboost-pr-checks@v1
         id: vitals
         with: { head-url: ..., base-url: ... }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: web-vitals, path: '${{ steps.vitals.outputs.json-path }}' }
 ```
 
@@ -99,6 +102,7 @@ jobs:
     needs: deploy-preview
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     concurrency:
       group: web-vitals-${{ github.event.number }}
@@ -119,7 +123,7 @@ Cloudflare does not send GitHub deployment events, so the check has to run in th
 
 ```yaml
       - id: deploy
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           command: pages deploy dist --project-name=my-site --branch=${{ github.head_ref }}
@@ -144,6 +148,7 @@ jobs:
     if: github.event.deployment_status.state == 'success' && github.event.deployment_status.environment != 'Production'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - uses: WillSmithTE/leboost-pr-checks@v1
@@ -178,6 +183,7 @@ jobs:
       startsWith(github.event.context, 'netlify/') && endsWith(github.event.context, '/deploy-preview')
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - uses: WillSmithTE/leboost-pr-checks@v1
@@ -187,16 +193,46 @@ jobs:
 ```
 
 `https://main--my-site.netlify.app` is the branch deploy of `main`; turn on branch deploys for `main` in Netlify, or use your
-production URL. The `status` event runs the workflow file from your default branch, so merge it before testing on a PR. If
-`target_url` points to the Netlify dashboard rather than the preview on your account, use
-`https://deploy-preview-${{ github.event.number }}--my-site.netlify.app` from a `pull_request` workflow instead and add a
-step that waits until the preview serves the PR's commit.
+production URL. The `status` event runs the workflow file from your default branch, so merge it before testing on a PR.
+If the status on your commits links somewhere other than the preview, set `head-url` to
+`https://deploy-preview-<number>--my-site.netlify.app` and `pr-number` to the PR instead.
 
-### GitHub Pages
+### A static site without previews
 
-The [demo repository](https://github.com/WillSmithTE/leboost-pr-checks-demo) publishes main at the site root and each PR
-under `/pr-preview/pr-<number>/` on the `gh-pages` branch, then runs the check in the same workflow. Its
+A static site (or any build you can serve locally) needs no preview host. Build main and the PR in the job, serve each on its
+own port and compare them. The browser applies the mobile network and CPU throttling, so local pages still load like they
+would on a phone. Nothing here needs a secret, so pull requests from forks are measured too (their result goes to the job
+summary, see [forks](#permissions-and-pull-requests-from-forks)).
+
+```yaml
+on: pull_request
+
+jobs:
+  web-vitals:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: '${{ github.event.pull_request.base.sha }}', path: base }
+      - uses: actions/checkout@v7
+        with: { ref: '${{ github.event.pull_request.head.sha }}', path: head }
+      # Build both here if your site needs it (npm ci && npm run build in each folder).
+      - run: |
+          nohup python3 -m http.server 8001 --bind 127.0.0.1 --directory base/site > /dev/null 2>&1 &
+          nohup python3 -m http.server 8002 --bind 127.0.0.1 --directory head/site > /dev/null 2>&1 &
+          sleep 2
+      - uses: WillSmithTE/leboost-pr-checks@v1
+        with:
+          head-url: http://127.0.0.1:8002
+          base-url: http://127.0.0.1:8001
+```
+
+The [demo repository](https://github.com/WillSmithTE/leboost-pr-checks-demo) runs this setup; its
 [workflow](https://github.com/WillSmithTE/leboost-pr-checks-demo/blob/main/.github/workflows/pr.yml) is a complete example.
+Local servers answer in a millisecond, so this setup cannot see TTFB or server-side changes. Everything after the first byte
+is measured.
 
 ## Your analytics stay clean
 
@@ -205,9 +241,9 @@ any other regression. The data those scripts send never leaves the runner's brow
 common vendors are answered with an empty `204 No Content` (with CORS headers, so the script sees a success and does not
 retry). This covers Google Analytics 4 and Google Ads, Datadog RUM and Session Replay, Segment, Amplitude, Mixpanel, PostHog,
 Heap, Hotjar, FullStory, Microsoft Clarity, LogRocket, Sentry, New Relic Browser, Plausible, Cloudflare Web Analytics,
-Vercel Analytics, leboost RUM, Usero session replay, and the Meta, LinkedIn, X, Reddit, TikTok and Microsoft Ads pixels. The full list is in
-[beacon-patterns.json](beacon-patterns.json), grouped by vendor and in Chrome's URL wildcard syntax, so other tools can
-reuse it.
+Vercel Analytics, leboost RUM, Usero session replay, and the Meta, LinkedIn, X, Reddit, TikTok and Microsoft Ads pixels.
+The full list is in [beacon-patterns.json](beacon-patterns.json), grouped by vendor and in Chrome's URL wildcard syntax, so
+other tools can reuse it.
 
 - Requests from iframes and web workers are covered too.
 - Add your own endpoints with `stub-beacons`, for example a first-party proxy such as `*example.com/ingest/*` or a
@@ -238,32 +274,36 @@ The comment then links to the run in leboost. A failed upload is a warning in th
 - A pull request from a fork gets a read-only token and no secrets. The action still measures (if a preview exists for
   the fork), writes the result to the job summary, skips the comment with one line in the log saying why, and skips the
   leboost upload. It never fails the job for this.
-- Do not switch to `pull_request_target` to get a write token for forks unless you understand the risk: it runs with secrets
-  on untrusted code.
+- Do not switch to `pull_request_target` to get a write token for forks unless you understand the risk: it runs untrusted
+  code with your secrets.
 
 ## Run time
 
 A load takes 2 to 10 seconds at the mobile profile, depending on the page. A run is 2 warm-up loads plus, per path,
-`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. On the demo site (a small static page) 8 rounds on one path
-took about 2 minutes including setup; on Usero (pages of about 1 MB) 8 rounds on two paths with prod took 6.5 to 7 minutes.
-Add `timeout-minutes` to the job and a `concurrency` group so a new push cancels the old run, as in the Cloudflare recipe.
+`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. With the default 8 rounds on one path, the action took
+52 s on the demo's one-page static site and 93 s on leboost.tech's home page. On Usero (pages of about 1 MB) 8 rounds on two
+paths with prod took 6.5 to 7 minutes.
+
+Set `timeout-minutes` on the job, and add a `concurrency` group (as in the Cloudflare recipe) so a new push cancels the old
+run.
 
 The action uses the Google Chrome that GitHub's hosted runners already have, so there is no browser download. On a
-self-hosted runner or in a container without Chrome, add `browser-actions/setup-chrome@v1` before it and pass its path as
+self-hosted runner or in a container without Chrome, add `browser-actions/setup-chrome@v2` before it and pass its path as
 the `CHROME_BIN` environment variable.
 
 ## Method
 
 **Each load is cold.** A fresh browser context per load (empty cache, no cookies, no service worker) in one headless Chrome.
 The mobile profile is Lighthouse's: Moto G Power viewport, 150 ms latency, 1.6 Mbps down, 750 Kbps up and 4x CPU slowdown,
-applied through the Chrome DevTools Protocol. Absolute numbers are not PageSpeed scores (DevTools throttling is gentler per
-request than Lighthouse's, and 4x on a shared CI runner is slower than 4x on a laptop). Only sides measured the same way in
-the same job are compared, which is what makes the comparison fair.
+applied through the Chrome DevTools Protocol. Chrome applies that latency to every request except the HTML document itself,
+so TTFB is the server's real response time. Absolute numbers are not PageSpeed scores (DevTools throttling is gentler per
+request than Lighthouse's, and 4x on a shared CI runner is slower than 4x on a laptop). The action only compares two sides
+measured the same way in the same job.
 
 **Metrics** come from Google's [web-vitals](https://github.com/GoogleChrome/web-vitals) library, injected before any page
-script. After the page settles the action fires the page-hidden event, which is how web-vitals finalises LCP, CLS and INP in
-a real tab. TBT follows Lighthouse (each long task's time over 50 ms, from FCP to the end of the load), cut off at load plus
-settle, so it covers the loading phase only. INP needs a real interaction, so it is only measured with `interact`, never
+script. After the page settles the action fires the page-hidden event, the same signal web-vitals uses to finalise LCP, CLS
+and INP in a real tab. TBT follows Lighthouse (each long task's time over 50 ms, from FCP to the end of the load), cut off
+at load plus settle, so it covers the loading phase only. INP needs a real interaction, so it is only measured with `interact`, never
 estimated.
 
 **Interleaved rounds.** One discarded warm-up load per preview wakes cold servers. Then each round loads main and the PR
@@ -307,18 +347,19 @@ rounds per page scored in 1000 random subsets of 8 rounds, with known regression
 | +150 ms TBT                            | 97%, 100%            |
 | +500 ms server delay, as an LCP change | 0%, 0% (by design)   |
 
-The last row is the price of measuring paint from the first byte: a slower server shows in the TTFB row, not as a verdict.
-Smaller pages have smaller floors, so smaller changes can count; the comment states the floor of each run.
+The last row is expected. Paint is measured from the first byte, so a slower server shows up in the TTFB row and does not
+produce a verdict. Smaller pages have smaller floors, so smaller changes can count; the comment states the floor of each
+run. On the demo's static page a heavier hero image (+107 KB) came out as +533 ms LCP and was flagged.
 
 ## Limits
 
-- This is a lab test on a shared CI machine, not your users. It catches changes a PR makes to how a page loads; it does not
-  predict field Core Web Vitals.
-- Previews are not production: cold servers, small databases, no CDN warmth. The verdict compares preview with preview to
-  keep that fair.
+- This is a lab test on a shared CI machine. It catches changes a PR makes to how a page loads and does not predict your
+  field Core Web Vitals.
+- Previews differ from production: cold servers, small databases, cold CDN caches. The verdict compares preview with preview,
+  so both sides share those conditions.
 - Pages behind a login are not supported yet. `headers` can pass a static token if your preview accepts one.
-- With 8 rounds a change under the floor can slip through, and the comment says so on every clean run. More rounds narrow it
-  and cost time.
+- With 8 rounds a change under the floor can slip through, and the comment says so on every clean run. More rounds narrow
+  that gap and take longer.
 - Chrome only.
 
 ## License

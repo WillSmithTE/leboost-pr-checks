@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: vitals
         uses: ./
         with:
@@ -35,7 +35,7 @@ jobs:
           test "$REGRESSIONS" = 0
           test "$IMPROVEMENTS" = 0
           grep -q "no significant change vs main" "$(dirname "$JSON_PATH")/comment.md"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: a-a-vitals

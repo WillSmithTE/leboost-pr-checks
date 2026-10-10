@@ -5,10 +5,10 @@ import type { Log } from './run'
 export type Env = Record<string, string | undefined>
 type Json = Record<string, unknown>
 
-const isRecord = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v)
-const at = (v: unknown, ...keys: string[]): unknown => keys.reduce<unknown>((o, k) => (isRecord(o) ? o[k] : undefined), v)
-const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
-const posInt = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null)
+export const isRecord = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v)
+export const at = (v: unknown, ...keys: string[]): unknown => keys.reduce<unknown>((o, k) => (isRecord(o) ? o[k] : undefined), v)
+export const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
+export const posInt = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null)
 
 export interface RunContext {
 	repo: string | null
@@ -107,6 +107,25 @@ export class GitHubApi {
 		})
 		const data: unknown = await res.json().catch(() => null)
 		return { status: res.status, data }
+	}
+
+	// A binary download such as an artifact zip. GitHub redirects to blob storage, which must not get the token.
+	async download(path: string, maxBytes: number): Promise<{ status: number; bytes: Uint8Array | null }> {
+		const first = await this.fetchImpl(`${this.apiUrl}${path}`, {
+			headers: { Authorization: `Bearer ${this.token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'usero-pr-checks' },
+			redirect: 'manual',
+			signal: AbortSignal.timeout(20_000),
+		})
+		const location = first.headers.get('location')
+		const redirected = first.status >= 300 && first.status < 400 && location !== null
+		if (redirected) await first.body?.cancel()
+		const res = redirected ? await this.fetchImpl(location, { signal: AbortSignal.timeout(20_000) }) : first
+		if (res.status !== 200 || Number(res.headers.get('content-length') ?? 0) > maxBytes) {
+			await res.body?.cancel()
+			return { status: res.status === 200 ? 413 : res.status, bytes: null }
+		}
+		const bytes = new Uint8Array(await res.arrayBuffer())
+		return bytes.length > maxBytes ? { status: 413, bytes: null } : { status: 200, bytes }
 	}
 }
 

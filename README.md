@@ -18,6 +18,7 @@ You need a preview URL for each PR and one for main. Add this job after the job 
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pull-requests: write
     steps:
       - uses: usero-feedback/pr-checks@v0
@@ -47,8 +48,8 @@ it at a site that reports to your production analytics.
 - Failed loads, and pages or metrics without enough good loads, are listed too.
 - A table with every metric per page, folded away unless something regressed. Only the significant rows say Slower or
   Faster.
-- A trend chart of main's recent runs with this PR's value beside them is designed ([spec](docs/chart-spec.md)) and not yet
-  switched on.
+- A trend chart for each page that changed: main's last 20 runs as a line, this PR as one orange dot beside it. A quiet run
+  gets one LCP chart inside the folded table. The chart appears from the third run on, see [Trend chart](#trend-chart).
 
 The [demo repository](https://github.com/usero-feedback/pr-checks-demo/pulls?q=is%3Apr) has a PR with a deliberate slow hero
 image and a PR that changes nothing, with the comment this action posted on each.
@@ -65,27 +66,33 @@ image and a PR that changes nothing, with the comment this action posted on each
 | `device`             | `mobile`              | `mobile` (Lighthouse's Slow 4G and 4x CPU profile) or `desktop`.                                                                         |
 | `interact`           |                       | INP measurement: one `PATH::SELECTOR` per line, clicked after load. Without it INP is not reported.                                      |
 | `headers`            |                       | Extra request headers, one `Name: value` per line, sent only to the head, base and prod sites.                                           |
-| `github-token`       | `${{ github.token }}` | Finds the PR and posts the comment.                                                                                                       |
+| `github-token`       | `${{ github.token }}` | Finds the PR, posts the comment and reads past runs for the trend chart.                                                                  |
 | `comment`            | `true`                | Post or update the PR comment. The job summary is written either way.                                                                     |
 | `pr-number`          | from the event        | The PR to comment on. Found from the event or the commit; set it for `workflow_dispatch` runs.                                           |
 | `fail-on-regression` | `false`               | Fail the job when anything regressed.                                                                                                     |
+| `chart-base-url`     | usero.io              | Where the trend chart images are drawn. Only for testing a chart server.                                                                 |
 
-| Output         | What it holds                                                              |
-| -------------- | -------------------------------------------------------------------------- |
-| `regressions`  | Number of significant regressions vs main.                                 |
-| `improvements` | Number of significant improvements vs main.                                |
-| `json-path`    | `vitals.json` with every raw sample and the summary. Upload it to keep it: |
-
-```yaml
-      - uses: usero-feedback/pr-checks@v0
-        id: vitals
-        with: { head-url: ..., base-url: ... }
-      - uses: actions/upload-artifact@v7
-        with: { name: web-vitals, path: '${{ steps.vitals.outputs.json-path }}' }
-```
+| Output         | What it holds                                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `regressions`  | Number of significant regressions vs main.                                                                 |
+| `improvements` | Number of significant improvements vs main.                                                                |
+| `json-path`    | `vitals.json` with every raw sample and the summary. The action also saves it as an artifact (see below). |
 
 The job fails only on a setup mistake (a missing or invalid input, or no Chrome on the runner), so a first install shows
 what to fix. A preview that is down or a load that times out is reported in the comment and the job still passes.
+
+## Trend chart
+
+Every run saves its `vitals.json` as a workflow artifact named `usero-pr-checks-<device>-<hash of base-url>`, kept for
+your repository's artifact retention (90 days by default). The next run lists those artifacts with the job's token (this
+is why it needs `actions: read`), downloads up to 20 of the newest, and takes main's median per page and metric from each.
+This run's main is the newest point. Runs on another device or base URL are never mixed in.
+
+- The chart appears once three runs have a value, so the first two runs of a new setup have none.
+- No history, no permission or a GitHub API error means no chart, never a failed step. The log says which, in one line.
+- The image is drawn by usero.io from its URL, which holds the metric, the page path and the rounded medians, nothing else:
+  no repository name, no site address, no token. GitHub fetches it once through its image proxy and caches it.
+- Reading history runs while the pages load, so it adds no time to the job.
 
 ## Recipes
 
@@ -108,6 +115,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pull-requests: write
     concurrency:
       group: web-vitals-${{ github.event.number }}
@@ -152,6 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pull-requests: write
     steps:
       - uses: usero-feedback/pr-checks@v0
@@ -187,6 +196,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pull-requests: write
     steps:
       - uses: usero-feedback/pr-checks@v0
@@ -215,6 +225,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
@@ -253,8 +264,9 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
 
 ## Permissions and pull requests from forks
 
-- The comment needs `pull-requests: write`. Repositories created after February 2023 default to a read-only token, so add
-  the `permissions` block from the quick start.
+- The comment needs `pull-requests: write`, and the trend chart needs `actions: read` to find earlier runs. Repositories
+  created after February 2023 default to a read-only token, so add the `permissions` block from the quick start. Without
+  `actions: read` the comment has no chart and the log says why; nothing else changes.
 - A pull request from a fork gets a read-only token and no secrets. The action still measures (if a preview exists for
   the fork), writes the result to the job summary and skips the comment with one line in the log saying why. It never fails
   the job for this.

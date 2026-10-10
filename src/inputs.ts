@@ -1,4 +1,5 @@
 // Action inputs, parsed and validated. Every error message names the input so a first setup is easy to fix.
+import { CHART_BASE_URL } from './chart'
 import { DEVICES, type DeviceName } from './config'
 import type { PageSpec } from './run'
 
@@ -16,6 +17,7 @@ export interface Inputs {
 	headers: Record<string, string>
 	failOnRegression: boolean
 	prNumber: number | null
+	chartBaseUrl: string
 }
 
 export type GetInput = (name: string) => string
@@ -109,5 +111,6 @@ export function parseInputs(get: GetInput): Inputs {
 		headers: parseHeaders(get('headers')),
 		failOnRegression: bool('fail-on-regression', input('fail-on-regression'), false),
 		prNumber: prRaw ? int('pr-number', prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null,
+		chartBaseUrl: url('chart-base-url', input('chart-base-url', CHART_BASE_URL)),
 	}
 }

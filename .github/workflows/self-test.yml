@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: read
+  # Reads earlier self-test runs for the trend chart; the action saves each run's vitals.json itself.
+  actions: read
 
 jobs:
   a-a:
@@ -36,9 +38,3 @@ jobs:
           test "$REGRESSIONS" = 0
           test "$IMPROVEMENTS" = 0
           grep -q "no significant change vs main" "$(dirname "$JSON_PATH")/comment.md"
-      - uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() }}
-        with:
-          name: a-a-vitals
-          path: ${{ steps.vitals.outputs.json-path }}
-          if-no-files-found: ignore

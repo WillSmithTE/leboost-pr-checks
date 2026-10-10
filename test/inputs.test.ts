@@ -19,7 +19,15 @@ describe('parseInputs', () => {
 			headers: {},
 			failOnRegression: false,
 			prNumber: null,
+			chartBaseUrl: 'https://usero.io/pr-checks/chart.png',
 		})
+	})
+
+	it('takes a chart server for testing and refuses one that is not a URL', () => {
+		expect(parse({ ...minimal, 'chart-base-url': 'http://localhost:5230/pr-checks/chart.png' }).chartBaseUrl).toBe(
+			'http://localhost:5230/pr-checks/chart.png',
+		)
+		expect(() => parse({ ...minimal, 'chart-base-url': 'charts' })).toThrow('chart-base-url must be an http(s) URL')
 	})
 
 	it('reads lists in any mix of lines, spaces and commas, and pairs interactions with their path', () => {

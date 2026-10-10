@@ -5,10 +5,12 @@ import { join } from 'node:path'
 import * as core from '@actions/core'
 import { findChrome } from './chrome'
 import { DEFAULT_ALPHA, DEVICES } from './config'
-import { contextFromEvent, type Env, findPullRequest, GitHubApi, readEvent, type RunContext, upsertComment } from './github'
+import { contextFromEvent, type Env, findPullRequest, GitHubApi, posInt, readEvent, type RunContext, upsertComment } from './github'
+import { artifactName, buildHistory, loadPastRuns } from './history'
 import { InputError, type Inputs, parseInputs } from './inputs'
 import { buildResult, countVerdicts, renderComment, type RunResult } from './report'
 import { firstLine } from './run'
+import { saveResult } from './upload'
 import { measureVitals } from './vitals'
 
 const log = (line: string): void => core.info(line)
@@ -70,6 +72,8 @@ export async function run(env: Env = process.env): Promise<void> {
 	for (const value of Object.values(inputs.headers)) if (value) core.setSecret(value)
 
 	const { ctx, api } = await resolveContext(inputs, env)
+	// Read while the pages load; it never rejects.
+	const pastRuns = loadPastRuns({ api, repo: ctx.repo, runId: posInt(Number(env.GITHUB_RUN_ID)), setup: inputs })
 	const outDir = join(env.RUNNER_TEMP ?? tmpdir(), 'usero-pr-checks', env.GITHUB_ACTION ?? 'run')
 	const started = Date.now()
 	let result: RunResult | null = null
@@ -111,7 +115,13 @@ export async function run(env: Env = process.env): Promise<void> {
 			durationMs: Date.now() - started,
 			generatedAt: new Date().toISOString(),
 		})
-		comment = renderComment(result, { failOnRegression: inputs.failOnRegression })
+		const { runs, note } = await pastRuns
+		log(note)
+		comment = renderComment(result, {
+			failOnRegression: inputs.failOnRegression,
+			history: buildHistory(runs, result),
+			chartBaseUrl: inputs.chartBaseUrl,
+		})
 	} catch (err) {
 		core.warning(`Usero PR checks could not finish measuring: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
 		comment = notMeasuredComment(firstLine(err), ctx)
@@ -121,6 +131,7 @@ export async function run(env: Env = process.env): Promise<void> {
 	log(`\n${comment}`)
 	await core.summary.addRaw(comment, true).write()
 	await postComment(inputs, ctx, api, comment)
+	if (jsonPath) await saveResult({ jsonPath, name: artifactName(inputs), env, log })
 
 	const { regressions, improvements } = result ? countVerdicts(result) : { regressions: 0, improvements: 0 }
 	core.setOutput('regressions', regressions)

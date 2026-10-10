@@ -37,7 +37,7 @@ inputs:
     required: false
     default: ''
   github-token:
-    description: Token used to find the pull request and post the comment. Needs pull-requests write to comment.
+    description: Token used to find the pull request, post the comment and read past runs for the trend chart. Needs pull-requests write to comment and actions read for the chart.
     required: false
     default: ${{ github.token }}
   comment:
@@ -52,6 +52,10 @@ inputs:
     description: Fail the job when anything regressed. Off by default, the check only reports.
     required: false
     default: 'false'
+  chart-base-url:
+    description: Where the trend chart images are drawn. Only for testing a chart server.
+    required: false
+    default: https://usero.io/pr-checks/chart.png
 
 outputs:
   regressions:
@@ -59,7 +63,7 @@ outputs:
   improvements:
     description: Number of significant improvements vs main.
   json-path:
-    description: Path of vitals.json, every raw sample plus the summary. Upload it with actions/upload-artifact to keep it.
+    description: Path of vitals.json, every raw sample plus the summary. The action also saves it as a workflow artifact for the trend chart.
 
 runs:
   using: node24

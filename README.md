@@ -205,7 +205,7 @@ any other regression. The data those scripts send never leaves the runner's brow
 common vendors are answered with an empty `204 No Content` (with CORS headers, so the script sees a success and does not
 retry). This covers Google Analytics 4 and Google Ads, Datadog RUM and Session Replay, Segment, Amplitude, Mixpanel, PostHog,
 Heap, Hotjar, FullStory, Microsoft Clarity, LogRocket, Sentry, New Relic Browser, Plausible, Cloudflare Web Analytics,
-Vercel Analytics, and the Meta, LinkedIn, X, Reddit, TikTok and Microsoft Ads pixels. The full list is in
+Vercel Analytics, leboost RUM, Usero session replay, and the Meta, LinkedIn, X, Reddit, TikTok and Microsoft Ads pixels. The full list is in
 [beacon-patterns.json](beacon-patterns.json), grouped by vendor and in Chrome's URL wildcard syntax, so other tools can
 reuse it.
 

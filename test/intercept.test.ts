@@ -38,6 +38,7 @@ describe('classify', () => {
 			'https://px.ads.linkedin.com/collect?pid=1',
 			'https://shop.example.com/cdn-cgi/rum?',
 			'https://z.clarity.ms/collect',
+			'https://leboost.tech/api/rum',
 		]
 		for (const url of stubbed) expect(classify(url, rules()), url).toBe('stub')
 		const scripts = [

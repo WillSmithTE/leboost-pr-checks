@@ -28,6 +28,8 @@
     "New Relic Browser": ["*bam.nr-data.net/*", "*bam.eu01.nr-data.net/*"],
     "Plausible": ["*plausible.io/api/event*"],
     "Cloudflare Web Analytics": ["*/cdn-cgi/rum*"],
+    "leboost RUM": ["*leboost.tech/api/rum*"],
+    "Usero session replay": ["*usero.io/api/replay-sessions*"],
     "Vercel Analytics and Speed Insights": ["*.vercel-insights.com/*", "*/_vercel/insights/*", "*/_vercel/speed-insights/*"],
     "Meta pixel": ["*facebook.com/tr*"],
     "LinkedIn Insight": ["*px.ads.linkedin.com/*"],

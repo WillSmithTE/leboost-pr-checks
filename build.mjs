@@ -8,8 +8,9 @@ import { build } from 'esbuild'
 const raw = {
 	name: 'raw',
 	setup(b) {
+		// Relative to the repo, so the bundle is byte-identical on every machine.
 		b.onResolve({ filter: /\?raw$/ }, args => ({
-			path: resolve(dirname(args.importer), args.path.replace(/\?raw$/, '')),
+			path: relative(process.cwd(), resolve(dirname(args.importer), args.path.replace(/\?raw$/, ''))),
 			namespace: 'raw',
 		}))
 		b.onLoad({ filter: /.*/, namespace: 'raw' }, async args => ({ contents: await readFile(args.path, 'utf8'), loader: 'text' }))

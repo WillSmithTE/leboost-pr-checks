@@ -1,0 +1,28 @@
+{
+  "name": "leboost-pr-checks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lab web vitals for every pull request: the PR preview against main, with a significance test, as a PR comment.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@actions/core": "3.0.1",
+    "playwright-core": "1.63.0",
+    "web-vitals": "6.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

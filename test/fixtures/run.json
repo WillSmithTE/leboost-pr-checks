@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "repo": "acme/shop",
+    "prNumber": 42,
+    "branch": "feature/hero-video",
+    "headSha": "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432",
+    "baseSha": "1234567890abcdef1234567890abcdef12345678",
+    "baseUrl": "https://shop-preview.example.workers.dev",
+    "headUrl": "https://shop-preview-pr-42.example.workers.dev",
+    "prodUrl": "https://shop.example.com",
+    "ciRunUrl": "https://github.com/acme/shop/actions/runs/123456",
+    "config": { "pairs": 6, "device": "mobile", "latencyMs": 150, "downloadKbps": 1638.4, "uploadKbps": 750, "cpuSlowdown": 4 },
+    "alpha": 0.05
+  },
+  "pages": [
+    {
+      "path": "/docs",
+      "loads": {
+        "base": [
+          { "FCP": 2010, "LCP": 2010, "CLS": 0, "TTFB": 180, "TBT": 20 },
+          { "FCP": 1990, "LCP": 1990, "CLS": 0, "TTFB": 170, "TBT": 25 },
+          { "FCP": 2030, "LCP": 2030, "CLS": 0, "TTFB": 190, "TBT": 18 },
+          { "FCP": 2005, "LCP": 2005, "CLS": 0, "TTFB": 175, "TBT": 22 },
+          { "FCP": 2020, "LCP": 2020, "CLS": 0, "TTFB": 185, "TBT": 30 },
+          { "FCP": 1995, "LCP": 1995, "CLS": 0, "TTFB": 165, "TBT": 21 }
+        ],
+        "head": [
+          { "FCP": 1710, "LCP": 1710, "CLS": 0, "TTFB": 182, "TBT": 24 },
+          { "FCP": 1690, "LCP": 1690, "CLS": 0, "TTFB": 168, "TBT": 19 },
+          { "FCP": 1730, "LCP": 1730, "CLS": 0, "TTFB": 188, "TBT": 26 },
+          { "FCP": 1705, "LCP": 1705, "CLS": 0, "TTFB": 177, "TBT": 20 },
+          { "FCP": 1720, "LCP": 1720, "CLS": 0, "TTFB": 186, "TBT": 23 },
+          { "FCP": 1700, "LCP": 1700, "CLS": 0, "TTFB": 171, "TBT": 28 }
+        ],
+        "prod": [
+          { "FCP": 1400, "LCP": 1400, "CLS": 0, "TTFB": 60, "TBT": 20 },
+          { "FCP": 1420, "LCP": 1420, "CLS": 0, "TTFB": 62, "TBT": 21 },
+          { "FCP": 1390, "LCP": 1390, "CLS": 0, "TTFB": 58, "TBT": 19 },
+          { "FCP": 1410, "LCP": 1410, "CLS": 0, "TTFB": 61, "TBT": 22 },
+          { "FCP": 1405, "LCP": 1405, "CLS": 0, "TTFB": 59, "TBT": 20 },
+          { "FCP": 1395, "LCP": 1395, "CLS": 0, "TTFB": 63, "TBT": 23 }
+        ]
+      },
+      "failures": { "base": [], "head": [], "prod": [] }
+    },
+    {
+      "path": "/",
+      "loads": {
+        "base": [
+          { "FCP": 2390, "LCP": 2400, "CLS": 0.002, "TTFB": 200, "TBT": 40 },
+          { "FCP": 2410, "LCP": 2450, "CLS": 0.002, "TTFB": 210, "TBT": 45 },
+          { "FCP": 2370, "LCP": 2380, "CLS": 0.002, "TTFB": 190, "TBT": 38 },
+          { "FCP": 2400, "LCP": 2420, "CLS": 0.002, "TTFB": 205, "TBT": 50 },
+          { "FCP": 2380, "LCP": 2390, "CLS": 0.002, "TTFB": 195, "TBT": 42 },
+          { "FCP": 2395, "LCP": 2410, "CLS": 0.002, "TTFB": 200, "TBT": 44 }
+        ],
+        "head": [
+          { "FCP": 2395, "LCP": 2900, "CLS": 0.081, "TTFB": 205, "TBT": 41 },
+          { "FCP": 2405, "LCP": 2950, "CLS": 0.083, "TTFB": 195, "TBT": 47 },
+          { "FCP": 2385, "LCP": 2880, "CLS": 0.08, "TTFB": 200, "TBT": 39 },
+          { "FCP": 2400, "LCP": 2920, "CLS": 0.082, "TTFB": 210, "TBT": 52 },
+          { "FCP": 2375, "LCP": 2890, "CLS": 0.081, "TTFB": 190, "TBT": 40 },
+          { "FCP": 2390, "LCP": 2930, "CLS": 0.08, "TTFB": 198, "TBT": 43 }
+        ],
+        "prod": [
+          { "FCP": 2100, "LCP": 2110, "CLS": 0.002, "TTFB": 70, "TBT": 40 },
+          { "FCP": 2120, "LCP": 2130, "CLS": 0.002, "TTFB": 72, "TBT": 42 }
+        ]
+      },
+      "failures": { "base": [], "head": [], "prod": ["HTTP 503", "HTTP 503", "HTTP 503", "HTTP 503"] }
+    },
+    {
+      "path": "/checkout",
+      "loads": {
+        "base": [
+          { "FCP": 1800, "LCP": 1900, "CLS": 0, "TTFB": 150, "TBT": 10 },
+          { "FCP": 1810, "LCP": 1910, "CLS": 0, "TTFB": 155, "TBT": 12 },
+          { "FCP": 1790, "LCP": 1890, "CLS": 0, "TTFB": 145, "TBT": 11 },
+          { "FCP": 1805, "LCP": 1905, "CLS": 0, "TTFB": 150, "TBT": 9 },
+          { "FCP": 1795, "LCP": 1895, "CLS": 0, "TTFB": 148, "TBT": 13 },
+          { "FCP": 1800, "LCP": 1900, "CLS": 0, "TTFB": 152, "TBT": 10 }
+        ],
+        "head": [],
+        "prod": []
+      },
+      "failures": {
+        "base": [],
+        "head": ["HTTP 500", "HTTP 500", "HTTP 500", "HTTP 500", "HTTP 500", "HTTP 500"],
+        "prod": ["HTTP 404", "HTTP 404", "HTTP 404", "HTTP 404", "HTTP 404", "HTTP 404"]
+      }
+    }
+  ]
+}

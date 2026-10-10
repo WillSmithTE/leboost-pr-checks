@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck, test, dist up to date
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # Actions runs dist/ straight from the repo, so a stale bundle would ship old code.
+      - name: Check dist matches the source
+        run: |
+          if [ -n "$(git status --porcelain dist)" ]; then
+            git status --porcelain dist | head -20
+            echo "::error::dist/ is out of date. Run npm run build and commit dist/."
+            exit 1
+          fi

@@ -1,0 +1,84 @@
+name: leboost PR checks
+description: Lab web vitals for every pull request. Loads the PR preview and main back to back and comments only on changes past the noise.
+author: leboost
+branding:
+  icon: activity
+  color: orange
+
+inputs:
+  head-url:
+    description: URL of this pull request's preview deployment.
+    required: true
+  base-url:
+    description: URL to compare against, usually the preview of your main branch. Comments call it "main".
+    required: true
+  prod-url:
+    description: Optional production URL, shown next to the result for reference. It never changes the verdict.
+    required: false
+    default: ''
+  paths:
+    description: Pages to measure, appended to each URL. One per line, or separated by spaces or commas.
+    required: false
+    default: /
+  rounds:
+    description: Rounds per page. Each round loads main and the PR once. 3 to 50. Each extra round adds two page loads per path.
+    required: false
+    default: '8'
+  device:
+    description: mobile (Lighthouse's Slow 4G and 4x CPU profile) or desktop.
+    required: false
+    default: mobile
+  interact:
+    description: 'Optional INP measurement: one "PATH::SELECTOR" per line. The element is clicked after load on that path. The click must not navigate away.'
+    required: false
+    default: ''
+  stub-beacons:
+    description: Extra URL patterns (Chrome wildcard syntax) to answer with an empty 204, added to the built-in list of analytics and RUM data endpoints. Use it for a first-party analytics proxy.
+    required: false
+    default: ''
+  block-hosts:
+    description: Hosts (or URL patterns) to block entirely, scripts included. Off by default, because a slow third-party tag is a regression worth seeing.
+    required: false
+    default: ''
+  headers:
+    description: 'Extra request headers, one "Name: value" per line, sent only to the head, base and prod sites. For example a Vercel protection bypass.'
+    required: false
+    default: ''
+  leboost-key:
+    description: Optional leboost site key. With it each run is stored in leboost PR checks with its history; without it the action still comments.
+    required: false
+    default: ''
+  leboost-url:
+    description: leboost endpoint.
+    required: false
+    default: https://leboost.tech
+  github-token:
+    description: Token used to find the pull request and post the comment. Needs pull-requests write to comment.
+    required: false
+    default: ${{ github.token }}
+  comment:
+    description: Post or update one comment on the pull request.
+    required: false
+    default: 'true'
+  pr-number:
+    description: Pull request to comment on. Found automatically from the event or the commit; set it for workflow_dispatch and similar.
+    required: false
+    default: ''
+  fail-on-regression:
+    description: Fail the job when anything regressed. Off by default, the check only reports.
+    required: false
+    default: 'false'
+
+outputs:
+  regressions:
+    description: Number of significant regressions vs main.
+  improvements:
+    description: Number of significant improvements vs main.
+  run-url:
+    description: The run's page in leboost PR checks, empty without a leboost key.
+  json-path:
+    description: Path of vitals.json, every raw sample plus the summary. Upload it with actions/upload-artifact to keep it.
+
+runs:
+  using: node24
+  main: dist/index.js

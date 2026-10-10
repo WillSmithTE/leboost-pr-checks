@@ -1,0 +1,43 @@
+name: Self-test
+
+# Runs the action from this commit against a public site as an A/A check: the same URL on both sides must
+# report no change. The read-only token also exercises the path a fork PR takes (no comment, job summary only).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  a-a:
+    name: A/A on leboost.tech
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - id: vitals
+        uses: ./
+        with:
+          head-url: https://leboost.tech
+          base-url: https://leboost.tech
+          paths: /
+      - name: Same URL on both sides reports no change
+        env:
+          REGRESSIONS: ${{ steps.vitals.outputs.regressions }}
+          IMPROVEMENTS: ${{ steps.vitals.outputs.improvements }}
+          JSON_PATH: ${{ steps.vitals.outputs.json-path }}
+        run: |
+          echo "regressions=$REGRESSIONS improvements=$IMPROVEMENTS"
+          test -s "$JSON_PATH"
+          test "$REGRESSIONS" = 0
+          test "$IMPROVEMENTS" = 0
+          grep -q "no significant change vs main" "$(dirname "$JSON_PATH")/comment.md"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: a-a-vitals
+          path: ${{ steps.vitals.outputs.json-path }}
+          if-no-files-found: ignore

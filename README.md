@@ -1,10 +1,12 @@
-# leboost PR checks
+# Usero PR checks
 
-A GitHub Action that measures lab web vitals (LCP, FCP, CLS, TBT, TTFB, optionally INP) on a pull request's preview and
-on your main branch's preview, back to back in the same job. It runs a significance test on the difference and comments on
-the PR only about changes larger than run-to-run noise. It never fails your build unless you ask it to.
+A GitHub Action that loads your pull request's preview and your main branch's preview back to back, in the same job, and
+measures lab web vitals on both (LCP, FCP, CLS, TBT, TTFB, optionally INP). A significance test decides what changed, and one
+PR comment reports only the changes larger than run-to-run noise. It never fails your build unless you ask it to.
 
 <img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main. LCP on / went from 802 ms to 1.33 s after the first byte, +533 ms." width="616">
+
+This is a pre-release. Inputs may change before v1, so pin `@v0` and check the release notes when you update.
 
 ## Quick start
 
@@ -18,7 +20,7 @@ You need a preview URL for each PR and one for main. Add this job after the job 
       contents: read
       pull-requests: write
     steps:
-      - uses: WillSmithTE/leboost-pr-checks@v1
+      - uses: usero-feedback/pr-checks@v0
         with:
           head-url: https://pr-${{ github.event.number }}.my-app.example.com
           base-url: https://main.my-app.example.com
@@ -29,7 +31,10 @@ That is the whole setup. The first run posts a comment on the PR, and every late
 result is also in the job summary.
 
 Recipes for common hosts are below: [Cloudflare](#cloudflare-workers-and-pages), [Vercel](#vercel),
-[Netlify](#netlify) and [static sites without previews](#a-static-site-without-previews).
+[Netlify](#netlify) and [sites you can serve inside the job](#serve-both-builds-inside-the-job).
+
+Each test load is a real page view on the URLs you give it, analytics included. See [Analytics](#analytics) before you point
+it at a site that reports to your production analytics.
 
 ## What it reports
 
@@ -40,39 +45,34 @@ Recipes for common hosts are below: [Cloudflare](#cloudflare-workers-and-pages),
 - Failed loads, and pages or metrics without enough good loads, are listed too.
 - A table with every metric per page, folded away unless something regressed.
 
-The [demo repository](https://github.com/WillSmithTE/leboost-pr-checks-demo/pulls?q=is%3Apr) has a PR with a deliberate
-slow hero image and a PR that changes nothing, with the comments this action posted on each.
+The [demo repository](https://github.com/usero-feedback/pr-checks-demo/pulls?q=is%3Apr) has a PR with a deliberate slow hero
+image and a PR that changes nothing, with the comment this action posted on each.
 
 ## Inputs
 
-| Input                | Default               | What it does                                                                                                                                  |
-| -------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `head-url`           | required              | The PR's preview URL.                                                                                                                         |
-| `base-url`           | required              | What to compare against, usually main's preview. The comment calls it "main". Any path on the URL is kept, so `https://x.dev/app` works.     |
-| `prod-url`           |                       | Your production URL. Its medians are shown in the table for reference and never change the result.                                           |
-| `paths`              | `/`                   | Pages to measure. One per line, or separated by spaces or commas.                                                                            |
-| `rounds`             | `8`                   | Rounds per page, 3 to 50. Each round loads main and the PR once, in alternating order.                                                       |
-| `device`             | `mobile`              | `mobile` (Lighthouse's Slow 4G and 4x CPU profile) or `desktop`.                                                                             |
-| `interact`           |                       | INP measurement: one `PATH::SELECTOR` per line, clicked after load. Without it INP is not reported.                                          |
-| `stub-beacons`       |                       | Extra URL patterns to answer with an empty 204, added to the built-in list. See [Your analytics stay clean](#your-analytics-stay-clean).     |
-| `block-hosts`        |                       | Hosts or URL patterns to block entirely, scripts included. Off by default.                                                                   |
-| `headers`            |                       | Extra request headers, one `Name: value` per line, sent only to the head, base and prod sites.                                               |
-| `leboost-key`        |                       | Your leboost site key, to keep every run's history. See [Keep a history in leboost](#keep-a-history-in-leboost).                              |
-| `leboost-url`        | `https://leboost.tech` | The leboost endpoint.                                                                                                                         |
-| `github-token`       | `${{ github.token }}` | Finds the PR and posts the comment.                                                                                                           |
-| `comment`            | `true`                | Post or update the PR comment. The job summary is written either way.                                                                         |
-| `pr-number`          | from the event        | The PR to comment on. Found from the event or the commit; set it for `workflow_dispatch` runs.                                               |
-| `fail-on-regression` | `false`               | Fail the job when anything regressed.                                                                                                         |
+| Input                | Default               | What it does                                                                                                                              |
+| -------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `head-url`           | required              | The PR's preview URL.                                                                                                                     |
+| `base-url`           | required              | What to compare against, usually main's preview. The comment calls it "main". Any path on the URL is kept, so `https://x.dev/app` works. |
+| `prod-url`           |                       | Your production URL. Its medians are shown in the table for reference and never change the result. Its loads are real production visits. |
+| `paths`              | `/`                   | Pages to measure. One per line, or separated by spaces or commas.                                                                        |
+| `rounds`             | `8`                   | Rounds per page, 3 to 50. Each round loads main and the PR once, in alternating order.                                                   |
+| `device`             | `mobile`              | `mobile` (Lighthouse's Slow 4G and 4x CPU profile) or `desktop`.                                                                         |
+| `interact`           |                       | INP measurement: one `PATH::SELECTOR` per line, clicked after load. Without it INP is not reported.                                      |
+| `headers`            |                       | Extra request headers, one `Name: value` per line, sent only to the head, base and prod sites.                                           |
+| `github-token`       | `${{ github.token }}` | Finds the PR and posts the comment.                                                                                                       |
+| `comment`            | `true`                | Post or update the PR comment. The job summary is written either way.                                                                     |
+| `pr-number`          | from the event        | The PR to comment on. Found from the event or the commit; set it for `workflow_dispatch` runs.                                           |
+| `fail-on-regression` | `false`               | Fail the job when anything regressed.                                                                                                     |
 
-| Output         | What it holds                                                                    |
-| -------------- | -------------------------------------------------------------------------------- |
-| `regressions`  | Number of significant regressions vs main.                                       |
-| `improvements` | Number of significant improvements vs main.                                      |
-| `run-url`      | The run's page in leboost, empty without a key.                                  |
-| `json-path`    | `vitals.json` with every raw sample and the summary. Upload it to keep it:       |
+| Output         | What it holds                                                              |
+| -------------- | -------------------------------------------------------------------------- |
+| `regressions`  | Number of significant regressions vs main.                                 |
+| `improvements` | Number of significant improvements vs main.                                |
+| `json-path`    | `vitals.json` with every raw sample and the summary. Upload it to keep it: |
 
 ```yaml
-      - uses: WillSmithTE/leboost-pr-checks@v1
+      - uses: usero-feedback/pr-checks@v0
         id: vitals
         with: { head-url: ..., base-url: ... }
       - uses: actions/upload-artifact@v7
@@ -108,13 +108,11 @@ jobs:
       group: web-vitals-${{ github.event.number }}
       cancel-in-progress: true
     steps:
-      - uses: WillSmithTE/leboost-pr-checks@v1
+      - uses: usero-feedback/pr-checks@v0
         with:
           head-url: https://pr-${{ github.event.number }}-my-worker.my-account.workers.dev
           base-url: https://main-my-worker.my-account.workers.dev
-          prod-url: https://example.com
           paths: / /docs
-          leboost-key: ${{ secrets.LEBOOST_KEY }}
 ```
 
 Cloudflare does not send GitHub deployment events, so the check has to run in the same workflow, after the deploy.
@@ -127,14 +125,14 @@ Cloudflare does not send GitHub deployment events, so the check has to run in th
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           command: pages deploy dist --project-name=my-site --branch=${{ github.head_ref }}
-      - uses: WillSmithTE/leboost-pr-checks@v1
+      - uses: usero-feedback/pr-checks@v0
         with:
           head-url: ${{ steps.deploy.outputs.deployment-url }}
           base-url: https://main.my-site.pages.dev
 ```
 
 `https://main.my-site.pages.dev` is the alias of the latest deploy from the `main` branch. If main is your production
-branch, use `https://my-site.pages.dev` as `base-url` instead.
+branch, use `https://my-site.pages.dev` as `base-url` instead, and read [Analytics](#analytics) first.
 
 ### Vercel
 
@@ -151,7 +149,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: WillSmithTE/leboost-pr-checks@v1
+      - uses: usero-feedback/pr-checks@v0
         with:
           head-url: ${{ github.event.deployment_status.environment_url }}
           base-url: https://my-app-git-main-my-team.vercel.app
@@ -186,7 +184,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: WillSmithTE/leboost-pr-checks@v1
+      - uses: usero-feedback/pr-checks@v0
         with:
           head-url: ${{ github.event.target_url }}
           base-url: https://main--my-site.netlify.app
@@ -197,9 +195,9 @@ production URL. The `status` event runs the workflow file from your default bran
 If the status on your commits links somewhere other than the preview, set `head-url` to
 `https://deploy-preview-<number>--my-site.netlify.app` and `pr-number` to the PR instead.
 
-### A static site without previews
+### Serve both builds inside the job
 
-A static site (or any build you can serve locally) needs no preview host. Build main and the PR in the job, serve each on its
+A static site, or any build you can serve locally, needs no preview host. Build main and the PR in the job, serve each on its
 own port and compare them. The browser applies the mobile network and CPU throttling, so local pages still load like they
 would on a phone. Nothing here needs a secret, so pull requests from forks are measured too (their result goes to the job
 summary, see [forks](#permissions-and-pull-requests-from-forks)).
@@ -223,96 +221,38 @@ jobs:
           nohup python3 -m http.server 8001 --bind 127.0.0.1 --directory base/site > /dev/null 2>&1 &
           nohup python3 -m http.server 8002 --bind 127.0.0.1 --directory head/site > /dev/null 2>&1 &
           sleep 2
-      - uses: WillSmithTE/leboost-pr-checks@v1
+      - uses: usero-feedback/pr-checks@v0
         with:
           head-url: http://127.0.0.1:8002
           base-url: http://127.0.0.1:8001
 ```
 
-The [demo repository](https://github.com/WillSmithTE/leboost-pr-checks-demo) runs this setup; its
-[workflow](https://github.com/WillSmithTE/leboost-pr-checks-demo/blob/main/.github/workflows/pr.yml) is a complete example.
+The [demo repository](https://github.com/usero-feedback/pr-checks-demo) runs this setup; its
+[workflow](https://github.com/usero-feedback/pr-checks-demo/blob/main/.github/workflows/pr.yml) is a complete example.
 Local servers answer in a millisecond, so this setup cannot see TTFB or server-side changes. Everything after the first byte
 is measured.
 
-## Your analytics stay clean
+## Analytics
 
-Every page loads its analytics, RUM and session replay scripts as usual, so a heavy or slow tag shows up in the numbers like
-any other regression. The data those scripts send never leaves the runner's browser: requests to the data endpoints of
-common vendors are answered with an empty `204 No Content` (with CORS headers, so the script sees a success and does not
-retry). This covers Google Analytics 4 and Google Ads, Datadog RUM and Session Replay, Segment, Amplitude, Mixpanel, PostHog,
-Heap, Hotjar, FullStory, Microsoft Clarity, LogRocket, Sentry, New Relic Browser, Plausible, Cloudflare Web Analytics,
-Vercel Analytics, leboost RUM, Usero session replay, and the Meta, LinkedIn, X, Reddit, TikTok and Microsoft Ads pixels.
-The full list is in [beacon-patterns.json](beacon-patterns.json), grouped by vendor and in Chrome's URL wildcard syntax, so
-other tools can reuse it.
+The action loads every page as a visitor's browser would. Nothing is blocked or faked: analytics, RUM and session replay
+scripts load, run and send their data, so a heavy or slow tag shows up in the numbers like any other regression.
 
-- Requests from iframes and web workers are covered too.
-- Add your own endpoints with `stub-beacons`, for example a first-party proxy such as `*example.com/ingest/*` or a
-  server-side Google Tag Manager domain.
-- A stubbed hit answers instantly, so the time a real beacon would spend on the network is missing. Beacons rarely sit on
-  the critical path, but this makes the numbers slightly optimistic for pages that wait on one.
-- Data sent over a WebSocket (some Hotjar setups) is not intercepted. Add that host to `block-hosts` if it matters.
-- `block-hosts` blocks hosts entirely, scripts included. Use it for something you never want in the measurement, such as a
-  chat widget that loads differently on previews.
-
-## Keep a history in leboost
-
-Without a key the action comments and writes the job summary, and nothing leaves your CI. With a
-[leboost](https://leboost.tech) site key every run is also stored in leboost's PR checks, where you can open any run with all
-its samples and follow a page's LCP or TBT across PRs.
-
-1. Add your site at [leboost.tech](https://leboost.tech) and open its **PR checks** page. The page shows the site key with a
-   Copy button. It is the same key leboost's RUM snippet uses.
-2. Save it as a repository secret named `LEBOOST_KEY` (Settings, Secrets and variables, Actions).
-3. Pass it to the action: `leboost-key: ${{ secrets.LEBOOST_KEY }}`.
-
-The comment then links to the run in leboost. A failed upload never fails the job: leboost's reason shows as a warning in the
-log and under the results in the job summary.
-
-### Upload API
-
-The action stores a run with one request. You only need this to call it yourself or to debug an upload.
-
-```
-POST https://leboost.tech/api/lab-runs
-X-Leboost-Key: lb_live_<24 hex characters>
-Idempotency-Key: <optional, 1 to 255 printable ASCII characters, no spaces>
-Content-Type: application/json
-```
-
-The body is contract version 1: `{ "version": 1, "repo", "prNumber", "branch", "headSha", "baseSha", "baseUrl", "headUrl",
-"prodUrl", "ciRunUrl", "config", "pages" }`, with each page's per-metric samples and summary as in the action's
-`vitals.json`. Unknown fields are ignored. Up to 2 MB, 50 pages and 50 samples per side.
-
-| Status | Body                              | When                                                                                                            |
-| ------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 201    | `{ runId, url }`                  | Stored. `url` is the run's page. A repeated `Idempotency-Key` returns the same body with `Idempotent-Replayed: true`. |
-| 400    | `{ error, issues, docs }`         | Not JSON, fails the contract (up to 20 `issues` as `{ path, message }`, `path` like `pages.0.metrics.LCP.base`), or a malformed `Idempotency-Key`. |
-| 401    | `{ error, docs }`                 | Missing or unknown site key. `error` says where to copy the key.                                                |
-| 413    | `{ error, docs }`                 | Body over 2 MB.                                                                                                 |
-| 429    | `{ error, docs, retryAfterSeconds }` | Over the rate limit, with a `Retry-After` header in seconds.                                                 |
-| 500    | `{ error }`                       | Storing failed and nothing was kept. Safe to retry with the same `Idempotency-Key`.                             |
-
-**Rate limit.** Each site stores up to 200 runs an hour and 1000 a day, counted over the last 60 minutes and 24 hours.
-`Retry-After` is when the oldest counted run leaves the window. A replayed `Idempotency-Key` is never limited.
-
-**Retries and duplicates.** The same `Idempotency-Key` on the same site always returns the run it first stored, for as long
-as leboost keeps the run (365 days); the body of a replay is not compared. Without the header every request stores a new run.
-The action sends `gh-<run id>-<run attempt>-<head SHA>-<hash>`, where the hash covers the job, the step and what was compared
-(device, URLs, paths), and retries a network error or a 5xx up to twice, 2 and 6 seconds apart, with the same key. So:
-
-- A retried upload within one job never stores the run twice.
-- Two jobs in one workflow (for example mobile and desktop) store two runs.
-- **Re-run jobs** in GitHub starts a new run attempt, which measures again, so it stores a new run with its own history
-  point. That is deliberate: it is a second measurement, not a retry of the first upload.
-- 4xx answers are not retried; the action prints leboost's message as is.
+- Point your previews at a test analytics environment (a separate GA4 property, a staging project in PostHog or Sentry, a
+  test key for your RUM tool), the same way you keep preview data out of your production database. The test loads land
+  there instead of in your real numbers.
+- A run sends 2 warm-up loads plus `rounds` x 2 loads per path to the previews: 18 page views for one path at the defaults.
+- `prod-url` loads are real visits to production and send real hits to your production analytics (3 per path per run). Leave
+  `prod-url` out if that matters.
+- The loads use an ordinary Chrome user agent from GitHub's runner IPs, so they are hard to filter out afterwards. A test
+  analytics environment is the dependable fix.
 
 ## Permissions and pull requests from forks
 
 - The comment needs `pull-requests: write`. Repositories created after February 2023 default to a read-only token, so add
   the `permissions` block from the quick start.
 - A pull request from a fork gets a read-only token and no secrets. The action still measures (if a preview exists for
-  the fork), writes the result to the job summary, skips the comment with one line in the log saying why, and skips the
-  leboost upload. It never fails the job for this.
+  the fork), writes the result to the job summary and skips the comment with one line in the log saying why. It never fails
+  the job for this.
 - Do not switch to `pull_request_target` to get a write token for forks unless you understand the risk: it runs untrusted
   code with your secrets.
 
@@ -320,8 +260,8 @@ The action sends `gh-<run id>-<run attempt>-<head SHA>-<hash>`, where the hash c
 
 A load takes 2 to 10 seconds at the mobile profile, depending on the page. A run is 2 warm-up loads plus, per path,
 `rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. With the default 8 rounds on one path, the action took
-52 s on the demo's one-page static site and 93 s on leboost.tech's home page. On Usero (pages of about 1 MB) 8 rounds on two
-paths with prod took 6.5 to 7 minutes.
+52 s on the demo's one-page static site and 93 s on a small marketing site's home page. On Usero (pages of about 1 MB) 8
+rounds on two paths with prod took 6.5 to 7 minutes.
 
 Set `timeout-minutes` on the job, and add a `concurrency` group (as in the Cloudflare recipe) so a new push cancels the old
 run.
@@ -342,8 +282,8 @@ measured the same way in the same job.
 **Metrics** come from Google's [web-vitals](https://github.com/GoogleChrome/web-vitals) library, injected before any page
 script. After the page settles the action fires the page-hidden event, the same signal web-vitals uses to finalise LCP, CLS
 and INP in a real tab. TBT follows Lighthouse (each long task's time over 50 ms, from FCP to the end of the load), cut off
-at load plus settle, so it covers the loading phase only. INP needs a real interaction, so it is only measured with `interact`, never
-estimated.
+at load plus settle, so it covers the loading phase only. INP needs a real interaction, so it is only measured with
+`interact`, never estimated.
 
 **Interleaved rounds.** One discarded warm-up load per preview wakes cold servers. Then each round loads main and the PR
 once, alternating which goes first, so slow drift on the runner lands on both sides equally. Prod, when given, gets 3 loads
@@ -404,3 +344,5 @@ run. On the demo's static page a heavier hero image (+107 KB) came out as +533 m
 ## License
 
 MIT
+
+Made by [Usero](https://usero.io/?utm_source=github&utm_medium=pr-checks), the direct line from user to engineer.

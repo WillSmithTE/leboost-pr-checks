@@ -1,8 +1,6 @@
 // Action inputs, parsed and validated. Every error message names the input so a first setup is easy to fix.
-import { DEFAULT_BEACON_PATTERNS, DEVICES, type DeviceName } from './config'
-import { hostToPatterns } from './intercept'
+import { DEVICES, type DeviceName } from './config'
 import type { PageSpec } from './run'
-import { DEFAULT_LEBOOST_URL } from './upload'
 
 export class InputError extends Error {}
 
@@ -13,12 +11,8 @@ export interface Inputs {
 	pages: PageSpec[]
 	rounds: number
 	device: DeviceName
-	leboostKey: string
-	leboostUrl: string
 	githubToken: string
 	comment: boolean
-	stubPatterns: string[]
-	blockPatterns: string[]
 	headers: Record<string, string>
 	failOnRegression: boolean
 	prNumber: number | null
@@ -28,7 +22,7 @@ export type GetInput = (name: string) => string
 
 const MAX_ROUNDS = 50
 
-// Paths and patterns never contain spaces, so any mix of newlines, spaces and commas separates them.
+// Paths never contain spaces, so any mix of newlines, spaces and commas separates them.
 const words = (raw: string): string[] => raw.split(/[\s,]+/).filter(Boolean)
 const lines = (raw: string): string[] =>
 	raw
@@ -110,12 +104,8 @@ export function parseInputs(get: GetInput): Inputs {
 		pages: parsePages(input('paths'), get('interact')),
 		rounds: int('rounds', input('rounds', '8'), { min: 3, max: MAX_ROUNDS }),
 		device: deviceRaw === 'desktop' ? 'desktop' : 'mobile',
-		leboostKey: input('leboost-key'),
-		leboostUrl: url('leboost-url', input('leboost-url', DEFAULT_LEBOOST_URL)),
 		githubToken: input('github-token'),
 		comment: bool('comment', input('comment'), true),
-		stubPatterns: [...DEFAULT_BEACON_PATTERNS, ...words(input('stub-beacons'))],
-		blockPatterns: words(input('block-hosts')).flatMap(hostToPatterns),
 		headers: parseHeaders(get('headers')),
 		failOnRegression: bool('fail-on-regression', input('fail-on-regression'), false),
 		prNumber: prRaw ? int('pr-number', prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null,

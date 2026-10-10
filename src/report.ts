@@ -1,4 +1,4 @@
-// Turns raw samples into the result document, the leboost upload payload and the PR comment.
+// Turns raw samples into the result document and the PR comment.
 import { CONTEXT_ONLY, type DeviceName, FLOORS, type Floor, FROM_FIRST_BYTE, METRICS, type MetricName } from './config'
 import type { Load, PageSamples, SideName } from './run'
 import { compareSamples, type Comparison, median, type Verdict } from './stats'
@@ -73,11 +73,8 @@ export interface RunResult extends RunMeta {
 	meta: {
 		alpha: number
 		prodLoads: number | null
-		stubbed: readonly string[]
-		blocked: readonly string[]
 		durationMs: number | null
 		generatedAt: string | null
-		leboostUrl: string | null
 	}
 }
 
@@ -190,8 +187,6 @@ export interface BuildInput extends RunMeta {
 	pages: PageInput[]
 	alpha: number
 	prodLoads?: number | null
-	stubbed?: readonly string[]
-	blocked?: readonly string[]
 	durationMs?: number | null
 	generatedAt?: string | null
 }
@@ -200,8 +195,6 @@ export function buildResult({
 	pages,
 	alpha,
 	prodLoads = null,
-	stubbed = [],
-	blocked = [],
 	durationMs = null,
 	generatedAt = null,
 	...meta
@@ -219,51 +212,7 @@ export function buildResult({
 		ciRunUrl: meta.ciRunUrl,
 		config: meta.config,
 		pages: pages.map(p => ({ ...summarisePage(p.path, p.loads, alpha), failures: p.failures })),
-		meta: { alpha, prodLoads, stubbed, blocked, durationMs, generatedAt, leboostUrl: null },
-	}
-}
-
-// ---- upload payload ------------------------------------------------------------------------------------
-
-type UploadSummary = Pick<MetricSummary, 'baseMedian' | 'headMedian' | 'deltaPct' | 'pValue' | 'shiftLow' | 'shiftHigh' | 'verdict'> & {
-	vsProd?: VsProd | null
-}
-
-export interface UploadPayload extends RunMeta {
-	version: 1
-	pages: {
-		path: string
-		metrics: Partial<Record<MetricName, { base: number[]; head: number[]; prod?: number[]; summary: UploadSummary }>>
-	}[]
-}
-
-// The v1 lab-runs contract: only these fields leave the runner. Pages with nothing compared are left out.
-export function toUploadPayload(result: RunResult): UploadPayload {
-	return {
-		version: 1,
-		repo: result.repo,
-		prNumber: result.prNumber,
-		branch: result.branch,
-		headSha: result.headSha,
-		baseSha: result.baseSha,
-		baseUrl: result.baseUrl,
-		headUrl: result.headUrl,
-		prodUrl: result.prodUrl,
-		ciRunUrl: result.ciRunUrl,
-		config: result.config,
-		pages: result.pages
-			.filter(page => Object.keys(page.metrics).length > 0)
-			.map(page => ({
-				path: page.path,
-				metrics: Object.fromEntries(
-					metricEntries(page).map(([metric, m]) => {
-						const { baseMedian, headMedian, deltaPct, pValue, shiftLow, shiftHigh, verdict } = m.summary
-						const summary: UploadSummary = { baseMedian, headMedian, deltaPct, pValue, shiftLow, shiftHigh, verdict }
-						if (m.prod) summary.vsProd = m.summary.vsProd ?? null
-						return [metric, m.prod ? { base: m.base, head: m.head, prod: m.prod, summary } : { base: m.base, head: m.head, summary }]
-					}),
-				),
-			})),
+		meta: { alpha, prodLoads, durationMs, generatedAt },
 	}
 }
 
@@ -275,7 +224,7 @@ const NBSP = ' '
 const SIDES: readonly SideName[] = ['base', 'head', 'prod']
 const SIDE_LABEL: Record<SideName, string> = { base: 'main', head: 'this PR', prod: 'prod' }
 const VERDICT_RANK: Record<Verdict, number> = { regressed: 0, improved: 1, 'no-change': 2 }
-export const HISTORY_DOCS_URL = 'https://github.com/WillSmithTE/leboost-pr-checks#keep-a-history-in-leboost'
+export const ACTION_URL = 'https://github.com/usero-feedback/pr-checks'
 
 const metricEntries = (page: Pick<PageResult, 'metrics'>): [MetricName, MetricResult][] =>
 	METRICS.flatMap(metric => {
@@ -442,11 +391,9 @@ function serverLine(pages: readonly PageResult[]): string | null {
 export interface CommentOptions {
 	// The job fails on a regression (fail-on-regression: true).
 	failOnRegression?: boolean
-	// No leboost key was given: one quiet line on where a history could live.
-	historyHint?: boolean
 }
 
-export function renderComment(result: RunResult, { failOnRegression = false, historyHint = false }: CommentOptions = {}): string {
+export function renderComment(result: RunResult, { failOnRegression = false }: CommentOptions = {}): string {
 	const { config, meta } = result
 	const hasProd = Boolean(result.prodUrl)
 	const pages = comparedPages(result).sort((a, b) => pageRank(a) - pageRank(b))
@@ -479,8 +426,6 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 
 	const gaps = gapLines(result)
 	if (gaps.length > 0) lines.push('**Incomplete data**', '', ...gaps, '')
-
-	if (meta.leboostUrl) lines.push(`[Full run and trend in leboost PR checks](${meta.leboostUrl})`, '')
 
 	if (pages.length > 0) {
 		lines.push(`<details${regressed.length > 0 ? ' open' : ''}>`, '<summary>All metrics, significant changes in bold</summary>', '')
@@ -518,7 +463,7 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 	]
 	if (result.ciRunUrl) footer.push(`[CI run](${result.ciRunUrl})${sha ? ` for ${sha}` : ''}.`)
 	else if (sha) footer.push(`Head ${sha}.`)
-	if (historyHint) footer.push(`To keep a history of these runs, add a [leboost key](${HISTORY_DOCS_URL}).`)
+	footer.push(`By [Usero PR checks](${ACTION_URL}).`)
 	lines.push(`<sub>${footer.join(' ')}</sub>`)
 	return `${lines.join('\n').trimEnd()}\n`
 }

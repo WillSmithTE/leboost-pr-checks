@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_BEACON_PATTERNS } from '../src/config'
 import { InputError, parseInputs } from '../src/inputs'
 
 const parse = (values: Record<string, string>) =>
@@ -15,12 +14,8 @@ describe('parseInputs', () => {
 			pages: [{ path: '/', interaction: null }],
 			rounds: 8,
 			device: 'mobile',
-			leboostKey: '',
-			leboostUrl: 'https://leboost.tech',
 			githubToken: '',
 			comment: true,
-			stubPatterns: [...DEFAULT_BEACON_PATTERNS],
-			blockPatterns: [],
 			headers: {},
 			failOnRegression: false,
 			prNumber: null,
@@ -32,8 +27,6 @@ describe('parseInputs', () => {
 			...minimal,
 			paths: '/\n/docs, /pricing',
 			interact: '/docs::button[aria-label="Open menu"]\n# a comment',
-			'stub-beacons': '*example.com/track*',
-			'block-hosts': 'widgets.example.com',
 			headers: 'x-vercel-protection-bypass: abc: def\nx-vercel-set-bypass-cookie: true',
 			device: 'desktop',
 			rounds: '10',
@@ -43,8 +36,6 @@ describe('parseInputs', () => {
 			{ path: '/docs', interaction: 'button[aria-label="Open menu"]' },
 			{ path: '/pricing', interaction: null },
 		])
-		expect(inputs.stubPatterns.at(-1)).toBe('*example.com/track*')
-		expect(inputs.blockPatterns).toEqual(['*://widgets.example.com/*', '*://*.widgets.example.com/*'])
 		expect(inputs.headers).toEqual({ 'x-vercel-protection-bypass': 'abc: def', 'x-vercel-set-bypass-cookie': 'true' })
 		expect(inputs.device).toBe('desktop')
 		expect(inputs.rounds).toBe(10)

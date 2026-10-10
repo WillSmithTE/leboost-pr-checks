@@ -59,7 +59,7 @@ function fakeApi(routes: (call: Call) => { status: number; data: unknown }) {
 	return { api: new GitHubApi('t', 'https://api.github.com', fetchImpl), calls }
 }
 
-const marker = '<!-- leboost-pr-checks mobile main.app.test -->'
+const marker = '<!-- usero-pr-checks mobile main.app.test -->'
 
 describe('upsertComment', () => {
 	const lines: string[] = []
@@ -108,8 +108,8 @@ describe('findPullRequest', () => {
 
 describe('comment helpers', () => {
 	it('keys the marker on device and base URL so separate setups keep separate comments', () => {
-		expect(commentMarker({ device: 'mobile', baseUrl: 'https://main.app.test/' })).toBe('<!-- leboost-pr-checks mobile main.app.test -->')
-		expect(commentMarker({ device: 'desktop', baseUrl: 'https://x.test/app/' })).toBe('<!-- leboost-pr-checks desktop x.test/app -->')
+		expect(commentMarker({ device: 'mobile', baseUrl: 'https://main.app.test/' })).toBe('<!-- usero-pr-checks mobile main.app.test -->')
+		expect(commentMarker({ device: 'desktop', baseUrl: 'https://x.test/app/' })).toBe('<!-- usero-pr-checks desktop x.test/app -->')
 	})
 
 	it('explains a run that could not measure without blaming the PR', () => {

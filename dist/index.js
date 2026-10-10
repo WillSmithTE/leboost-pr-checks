@@ -1778,11 +1778,11 @@ var require_request = __commonJS({
           }
         } else if (headers && typeof headers === "object") {
           if (headers[Symbol.iterator]) {
-            for (const header2 of headers) {
-              if (!Array.isArray(header2) || header2.length !== 2) {
+            for (const header of headers) {
+              if (!Array.isArray(header) || header.length !== 2) {
                 throw new InvalidArgumentError("headers must be in key-value pair format");
               }
-              processHeader(this, header2[0], header2[1]);
+              processHeader(this, header[0], header[1]);
             }
           } else {
             const keys = Object.keys(headers);
@@ -4171,9 +4171,9 @@ var require_util2 = __commonJS({
       return "success";
     }
     function appendFetchMetadata(httpRequest) {
-      let header2 = null;
-      header2 = httpRequest.mode;
-      httpRequest.headersList.set("sec-fetch-mode", header2, true);
+      let header = null;
+      header = httpRequest.mode;
+      httpRequest.headersList.set("sec-fetch-mode", header, true);
     }
     function appendRequestOriginHeader(request) {
       let serializedOrigin = request.origin;
@@ -6526,22 +6526,22 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header2 = `${method} ${path} HTTP/1.1\r
+      let header = `${method} ${path} HTTP/1.1\r
 `;
       if (typeof host === "string") {
-        header2 += `host: ${host}\r
+        header += `host: ${host}\r
 `;
       } else {
-        header2 += client[kHostHeader];
+        header += client[kHostHeader];
       }
       if (upgrade) {
-        header2 += `connection: upgrade\r
+        header += `connection: upgrade\r
 upgrade: ${upgrade}\r
 `;
       } else if (client[kPipelining] && !socket[kReset]) {
-        header2 += "connection: keep-alive\r\n";
+        header += "connection: keep-alive\r\n";
       } else {
-        header2 += "connection: close\r\n";
+        header += "connection: close\r\n";
       }
       if (Array.isArray(headers)) {
         for (let n = 0; n < headers.length; n += 2) {
@@ -6549,41 +6549,41 @@ upgrade: ${upgrade}\r
           const val = headers[n + 1];
           if (Array.isArray(val)) {
             for (let i = 0; i < val.length; i++) {
-              header2 += `${key}: ${val[i]}\r
+              header += `${key}: ${val[i]}\r
 `;
             }
           } else {
-            header2 += `${key}: ${val}\r
+            header += `${key}: ${val}\r
 `;
           }
         }
       }
       if (channels.sendHeaders.hasSubscribers) {
-        channels.sendHeaders.publish({ request, headers: header2, socket });
+        channels.sendHeaders.publish({ request, headers: header, socket });
       }
       if (!body || bodyLength === 0) {
-        writeBuffer(abort, null, client, request, socket, contentLength, header2, expectsPayload);
+        writeBuffer(abort, null, client, request, socket, contentLength, header, expectsPayload);
       } else if (util.isBuffer(body)) {
-        writeBuffer(abort, body, client, request, socket, contentLength, header2, expectsPayload);
+        writeBuffer(abort, body, client, request, socket, contentLength, header, expectsPayload);
       } else if (util.isBlobLike(body)) {
         if (typeof body.stream === "function") {
-          writeIterable(abort, body.stream(), client, request, socket, contentLength, header2, expectsPayload);
+          writeIterable(abort, body.stream(), client, request, socket, contentLength, header, expectsPayload);
         } else {
-          writeBlob(abort, body, client, request, socket, contentLength, header2, expectsPayload);
+          writeBlob(abort, body, client, request, socket, contentLength, header, expectsPayload);
         }
       } else if (util.isStream(body)) {
-        writeStream(abort, body, client, request, socket, contentLength, header2, expectsPayload);
+        writeStream(abort, body, client, request, socket, contentLength, header, expectsPayload);
       } else if (util.isIterable(body)) {
-        writeIterable(abort, body, client, request, socket, contentLength, header2, expectsPayload);
+        writeIterable(abort, body, client, request, socket, contentLength, header, expectsPayload);
       } else {
         assert(false);
       }
       return true;
     }
-    function writeStream(abort, body, client, request, socket, contentLength, header2, expectsPayload) {
+    function writeStream(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       assert(contentLength !== 0 || client[kRunning] === 0, "stream body cannot be pipelined");
       let finished = false;
-      const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header: header2 });
+      const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header });
       const onData = function(chunk) {
         if (finished) {
           return;
@@ -6649,22 +6649,22 @@ upgrade: ${upgrade}\r
         setImmediate(onClose);
       }
     }
-    function writeBuffer(abort, body, client, request, socket, contentLength, header2, expectsPayload) {
+    function writeBuffer(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       try {
         if (!body) {
           if (contentLength === 0) {
-            socket.write(`${header2}content-length: 0\r
+            socket.write(`${header}content-length: 0\r
 \r
 `, "latin1");
           } else {
             assert(contentLength === null, "no body must not have content length");
-            socket.write(`${header2}\r
+            socket.write(`${header}\r
 `, "latin1");
           }
         } else if (util.isBuffer(body)) {
           assert(contentLength === body.byteLength, "buffer body must have content length");
           socket.cork();
-          socket.write(`${header2}content-length: ${contentLength}\r
+          socket.write(`${header}content-length: ${contentLength}\r
 \r
 `, "latin1");
           socket.write(body);
@@ -6680,7 +6680,7 @@ upgrade: ${upgrade}\r
         abort(err);
       }
     }
-    async function writeBlob(abort, body, client, request, socket, contentLength, header2, expectsPayload) {
+    async function writeBlob(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       assert(contentLength === body.size, "blob body must have content length");
       try {
         if (contentLength != null && contentLength !== body.size) {
@@ -6688,7 +6688,7 @@ upgrade: ${upgrade}\r
         }
         const buffer = Buffer.from(await body.arrayBuffer());
         socket.cork();
-        socket.write(`${header2}content-length: ${contentLength}\r
+        socket.write(`${header}content-length: ${contentLength}\r
 \r
 `, "latin1");
         socket.write(buffer);
@@ -6703,7 +6703,7 @@ upgrade: ${upgrade}\r
         abort(err);
       }
     }
-    async function writeIterable(abort, body, client, request, socket, contentLength, header2, expectsPayload) {
+    async function writeIterable(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       assert(contentLength !== 0 || client[kRunning] === 0, "iterator body cannot be pipelined");
       let callback = null;
       function onDrain() {
@@ -6722,7 +6722,7 @@ upgrade: ${upgrade}\r
         }
       });
       socket.on("close", onDrain).on("drain", onDrain);
-      const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header: header2 });
+      const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header });
       try {
         for await (const chunk of body) {
           if (socket[kError]) {
@@ -6740,19 +6740,19 @@ upgrade: ${upgrade}\r
       }
     }
     var AsyncWriter = class {
-      constructor({ abort, socket, request, contentLength, client, expectsPayload, header: header2 }) {
+      constructor({ abort, socket, request, contentLength, client, expectsPayload, header }) {
         this.socket = socket;
         this.request = request;
         this.contentLength = contentLength;
         this.client = client;
         this.bytesWritten = 0;
         this.expectsPayload = expectsPayload;
-        this.header = header2;
+        this.header = header;
         this.abort = abort;
         socket[kWriting] = true;
       }
       write(chunk) {
-        const { socket, request, contentLength, client, bytesWritten, expectsPayload, header: header2 } = this;
+        const { socket, request, contentLength, client, bytesWritten, expectsPayload, header } = this;
         if (socket[kError]) {
           throw socket[kError];
         }
@@ -6775,10 +6775,10 @@ upgrade: ${upgrade}\r
             socket[kReset] = true;
           }
           if (contentLength === null) {
-            socket.write(`${header2}transfer-encoding: chunked\r
+            socket.write(`${header}transfer-encoding: chunked\r
 `, "latin1");
           } else {
-            socket.write(`${header2}content-length: ${contentLength}\r
+            socket.write(`${header}content-length: ${contentLength}\r
 \r
 `, "latin1");
           }
@@ -6802,7 +6802,7 @@ ${len.toString(16)}\r
         return ret;
       }
       end() {
-        const { socket, contentLength, client, bytesWritten, expectsPayload, header: header2, request } = this;
+        const { socket, contentLength, client, bytesWritten, expectsPayload, header, request } = this;
         request.onRequestSent();
         socket[kWriting] = false;
         if (socket[kError]) {
@@ -6813,11 +6813,11 @@ ${len.toString(16)}\r
         }
         if (bytesWritten === 0) {
           if (expectsPayload) {
-            socket.write(`${header2}content-length: 0\r
+            socket.write(`${header}content-length: 0\r
 \r
 `, "latin1");
           } else {
-            socket.write(`${header2}\r
+            socket.write(`${header}\r
 `, "latin1");
           }
         } else if (contentLength === null) {
@@ -7549,15 +7549,15 @@ var require_redirect_handler = __commonJS({
         }
       }
     }
-    function shouldRemoveHeader(header2, removeContent, unknownOrigin) {
-      if (header2.length === 4) {
-        return util.headerNameToString(header2) === "host";
+    function shouldRemoveHeader(header, removeContent, unknownOrigin) {
+      if (header.length === 4) {
+        return util.headerNameToString(header) === "host";
       }
-      if (removeContent && util.headerNameToString(header2).startsWith("content-")) {
+      if (removeContent && util.headerNameToString(header).startsWith("content-")) {
         return true;
       }
-      if (unknownOrigin && (header2.length === 13 || header2.length === 6 || header2.length === 19)) {
-        const name = util.headerNameToString(header2);
+      if (unknownOrigin && (header.length === 13 || header.length === 6 || header.length === 19)) {
+        const name = util.headerNameToString(header);
         return name === "authorization" || name === "cookie" || name === "proxy-authorization";
       }
       return false;
@@ -11941,14 +11941,14 @@ var require_headers = __commonJS({
     function fill(headers, object) {
       if (Array.isArray(object)) {
         for (let i = 0; i < object.length; ++i) {
-          const header2 = object[i];
-          if (header2.length !== 2) {
+          const header = object[i];
+          if (header.length !== 2) {
             throw webidl.errors.exception({
               header: "Headers constructor",
-              message: `expected name/value pair to be length 2, found ${header2.length}.`
+              message: `expected name/value pair to be length 2, found ${header.length}.`
             });
           }
-          appendHeader(headers, header2[0], header2[1]);
+          appendHeader(headers, header[0], header[1]);
         }
       } else if (typeof object === "object" && object !== null) {
         const keys = Object.keys(object);
@@ -15394,10 +15394,10 @@ var require_util5 = __commonJS({
       const serializedB = URLSerializer(B, excludeFragment);
       return serializedA === serializedB;
     }
-    function getFieldValues(header2) {
-      assert(header2 !== null);
+    function getFieldValues(header) {
+      assert(header !== null);
       const values2 = [];
-      for (let value of header2.split(",")) {
+      for (let value of header.split(",")) {
         value = value.trim();
         if (isValidHeaderName(value)) {
           values2.push(value);
@@ -16296,20 +16296,20 @@ var require_parse = __commonJS({
     var { isCTLExcludingHtab } = require_util6();
     var { collectASequenceOfCodePointsFast } = require_data_url();
     var assert = __require("node:assert");
-    function parseSetCookie(header2) {
-      if (isCTLExcludingHtab(header2)) {
+    function parseSetCookie(header) {
+      if (isCTLExcludingHtab(header)) {
         return null;
       }
       let nameValuePair = "";
       let unparsedAttributes = "";
       let name = "";
       let value = "";
-      if (header2.includes(";")) {
+      if (header.includes(";")) {
         const position = { position: 0 };
-        nameValuePair = collectASequenceOfCodePointsFast(";", header2, position);
-        unparsedAttributes = header2.slice(position.position);
+        nameValuePair = collectASequenceOfCodePointsFast(";", header, position);
+        unparsedAttributes = header.slice(position.position);
       } else {
-        nameValuePair = header2;
+        nameValuePair = header;
       }
       if (!nameValuePair.includes("=")) {
         value = nameValuePair;
@@ -19411,8 +19411,8 @@ var Summary = class {
         if (typeof cell === "string") {
           return this.wrap("td", cell);
         }
-        const { header: header2, data, colspan, rowspan } = cell;
-        const tag = header2 ? "th" : "td";
+        const { header, data, colspan, rowspan } = cell;
+        const tag = header ? "th" : "td";
         const attrs = Object.assign(Object.assign({}, colspan && { colspan }), rowspan && { rowspan });
         return this.wrap(tag, data, attrs);
       }).join("");
@@ -19589,7 +19589,7 @@ var KNOWN_PATHS = [
 ];
 var CHROME_NOT_FOUND = [
   "No Chrome or Chromium found. GitHub-hosted ubuntu-latest, windows-latest and macos-latest runners have Google Chrome",
-  "preinstalled. On a self-hosted runner or in a container, add this step before leboost-pr-checks:",
+  "preinstalled. On a self-hosted runner or in a container, add this step before usero-feedback/pr-checks:",
   "  - uses: browser-actions/setup-chrome@v2",
   "    id: chrome",
   "and pass its path with `env: CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}`."
@@ -19622,49 +19622,6 @@ function findChrome({ env, isExecutable = executable }) {
   if (known) return known;
   throw new Error(CHROME_NOT_FOUND);
 }
-
-// beacon-patterns.json
-var beacon_patterns_default = {
-  description: "Outbound data hits of common analytics, RUM, session replay and ad pixel vendors, in Chrome's URL wildcard syntax. leboost-pr-checks answers each with an empty 204 before it leaves the browser, so test loads never reach anyone's analytics. Vendor scripts still download and run.",
-  patterns: {
-    "Google Analytics 4 and Google Ads": [
-      "*google-analytics.com/*collect*",
-      "*analytics.google.com/*collect*",
-      "*googletagmanager.com/*collect*",
-      "*google.com/g/collect*",
-      "*google.com/ccm/collect*",
-      "*google.com/pagead/*",
-      "*doubleclick.net/*"
-    ],
-    "Datadog RUM and Session Replay": [
-      "*browser-intake-*datadoghq.com/*",
-      "*browser-intake-*datadoghq.eu/*",
-      "*browser-intake-*ddog-gov.com/*"
-    ],
-    Segment: ["*api.segment.io/*"],
-    Amplitude: ["*api2.amplitude.com/*", "*api.eu.amplitude.com/*"],
-    Mixpanel: ["*api.mixpanel.com/*", "*api-js.mixpanel.com/*", "*api-eu.mixpanel.com/*"],
-    PostHog: ["*.posthog.com/e/*", "*.posthog.com/i/*", "*.posthog.com/s/*", "*.posthog.com/batch*"],
-    Heap: ["*heapanalytics.com/h*"],
-    Hotjar: ["*.hotjar.com/api/*", "*.hotjar.io/*"],
-    FullStory: ["*.fullstory.com/rec/*"],
-    "Microsoft Clarity": ["*.clarity.ms/collect*"],
-    LogRocket: ["*.lr-ingest.io/*", "*.lr-ingest.com/*", "*.lr-in-prod.com/*"],
-    Sentry: ["*.ingest.sentry.io/*", "*.ingest.*.sentry.io/*"],
-    "New Relic Browser": ["*bam.nr-data.net/*", "*bam.eu01.nr-data.net/*"],
-    Plausible: ["*plausible.io/api/event*"],
-    "Cloudflare Web Analytics": ["*/cdn-cgi/rum*"],
-    "leboost RUM": ["*leboost.tech/api/rum*"],
-    "Usero session replay": ["*usero.io/api/replay-sessions*"],
-    "Vercel Analytics and Speed Insights": ["*.vercel-insights.com/*", "*/_vercel/insights/*", "*/_vercel/speed-insights/*"],
-    "Meta pixel": ["*facebook.com/tr*"],
-    "LinkedIn Insight": ["*px.ads.linkedin.com/*"],
-    "X (Twitter) pixel": ["*analytics.twitter.com/*", "*t.co/i/adsct*"],
-    "Reddit pixel": ["*alb.reddit.com/*"],
-    "TikTok pixel": ["*analytics.tiktok.com/api/*"],
-    "Microsoft Advertising (UET)": ["*bat.bing.com/action/*"]
-  }
-};
 
 // src/config.ts
 var METRICS = ["LCP", "FCP", "CLS", "TBT", "TTFB", "INP"];
@@ -19702,7 +19659,6 @@ var DEFAULT_ALPHA = 0.05;
 var DEFAULT_PROD_LOADS = 3;
 var SETTLE_MS = 500;
 var IDLE_TIMEOUT_MS = 2e3;
-var DEFAULT_BEACON_PATTERNS = Object.values(beacon_patterns_default.patterns).flat();
 
 // src/github.ts
 import { readFileSync } from "node:fs";
@@ -19780,7 +19736,7 @@ var GitHubApi = class {
       Authorization: `Bearer ${this.token}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "leboost-pr-checks"
+      "User-Agent": "usero-pr-checks"
     };
     if (body) headers["Content-Type"] = "application/json";
     const res = await this.fetchImpl(`${this.apiUrl}${path}`, {
@@ -19843,95 +19799,88 @@ function reportFailure(status, what, log2) {
   return "failed";
 }
 
-// src/intercept.ts
-function wildcardToRegExp(pattern) {
-  let source = "";
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i];
-    if (ch === "\\" && i + 1 < pattern.length) source += escapeRegExp(pattern[++i]);
-    else if (ch === "*") source += ".*";
-    else if (ch === "?") source += ".";
-    else source += escapeRegExp(ch);
+// src/inputs.ts
+var InputError = class extends Error {
+};
+var MAX_ROUNDS = 50;
+var words = (raw) => raw.split(/[\s,]+/).filter(Boolean);
+var lines = (raw) => raw.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+function url(name, raw) {
+  try {
+    const u = new URL(raw);
+    if (u.protocol === "http:" || u.protocol === "https:") return raw;
+  } catch {
   }
-  return new RegExp(`^${source}$`, "s");
+  throw new InputError(`${name} must be an http(s) URL, got "${raw}".`);
 }
-var escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-function hostToPatterns(entry) {
-  if (entry.includes("*") || entry.includes("/")) return [entry];
-  return [`*://${entry}/*`, `*://*.${entry}/*`];
+function bool(name, raw, fallback) {
+  const v = raw.trim().toLowerCase();
+  if (v === "") return fallback;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  throw new InputError(`${name} must be true or false, got "${raw}".`);
 }
-function classify(url2, rules, compiled = compile(rules)) {
-  if (compiled.stub.some((re) => re.test(url2))) return "stub";
-  if (compiled.block.some((re) => re.test(url2))) return "block";
-  if (compiled.headerOrigins.length > 0 && compiled.headerOrigins.includes(originOf(url2))) return "headers";
-  return null;
+function int(name, raw, { min, max }) {
+  const n = Number(raw.trim());
+  if (!Number.isInteger(n) || n < min || n > max) throw new InputError(`${name} must be a whole number from ${min} to ${max}, got "${raw}".`);
+  return n;
 }
-function compile(rules) {
+function parseHeaders(raw) {
+  const out = {};
+  for (const line of lines(raw)) {
+    const at2 = line.indexOf(":");
+    const name = line.slice(0, at2).trim();
+    if (at2 < 1 || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) {
+      throw new InputError('headers expects one "Name: value" per line.');
+    }
+    out[name] = line.slice(at2 + 1).trim();
+  }
+  return out;
+}
+function parsePages(pathsRaw, interactRaw) {
+  const paths = words(pathsRaw);
+  if (paths.length === 0) paths.push("/");
+  for (const path of paths) {
+    if (!path.startsWith("/")) throw new InputError(`paths must start with /, got "${path}".`);
+  }
+  if (new Set(paths).size !== paths.length) throw new InputError("paths lists the same path twice.");
+  const interactions = /* @__PURE__ */ new Map();
+  for (const line of lines(interactRaw)) {
+    const at2 = line.indexOf("::");
+    if (at2 < 1) throw new InputError(`interact expects "PATH::SELECTOR" per line, got "${line}".`);
+    const path = line.slice(0, at2).trim();
+    if (!paths.includes(path)) throw new InputError(`interact names ${path}, which is not in paths.`);
+    interactions.set(path, line.slice(at2 + 2).trim());
+  }
+  return paths.map((path) => ({ path, interaction: interactions.get(path) ?? null }));
+}
+function parseInputs(get) {
+  const input = (name, fallback = "") => {
+    const v = get(name).trim();
+    return v === "" ? fallback : v;
+  };
+  const headRaw = input("head-url");
+  const baseRaw = input("base-url");
+  if (!headRaw) throw new InputError("head-url is required: the URL of this pull request's preview deployment.");
+  if (!baseRaw) throw new InputError("base-url is required: the URL to compare against, usually your main branch preview.");
+  const prodRaw = input("prod-url");
+  const deviceRaw = input("device", "mobile");
+  if (!(deviceRaw in DEVICES)) throw new InputError(`device must be mobile or desktop, got "${deviceRaw}".`);
+  const prRaw = input("pr-number");
   return {
-    stub: rules.stub.map(wildcardToRegExp),
-    block: rules.block.map(wildcardToRegExp),
-    headerOrigins: Object.keys(rules.headers).length > 0 ? rules.headerOrigins : []
+    headUrl: url("head-url", headRaw),
+    baseUrl: url("base-url", baseRaw),
+    prodUrl: prodRaw ? url("prod-url", prodRaw) : null,
+    pages: parsePages(input("paths"), get("interact")),
+    rounds: int("rounds", input("rounds", "8"), { min: 3, max: MAX_ROUNDS }),
+    device: deviceRaw === "desktop" ? "desktop" : "mobile",
+    githubToken: input("github-token"),
+    comment: bool("comment", input("comment"), true),
+    headers: parseHeaders(get("headers")),
+    failOnRegression: bool("fail-on-regression", input("fail-on-regression"), false),
+    prNumber: prRaw ? int("pr-number", prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null
   };
 }
-function originOf(url2) {
-  try {
-    return new URL(url2).origin;
-  } catch {
-    return "";
-  }
-}
-var header = (headers, name) => Object.entries(headers).find(([k]) => k.toLowerCase() === name)?.[1];
-function stubHeaders(requestHeaders) {
-  const origin = header(requestHeaders, "origin");
-  return [
-    { name: "access-control-allow-origin", value: origin ?? "*" },
-    ...origin ? [{ name: "access-control-allow-credentials", value: "true" }] : [],
-    { name: "access-control-allow-methods", value: "GET, POST, PUT, OPTIONS" },
-    { name: "access-control-allow-headers", value: header(requestHeaders, "access-control-request-headers") ?? "*" },
-    { name: "access-control-max-age", value: "600" }
-  ];
-}
-async function installInterceptor(browser, rules) {
-  const stats = { stubbed: 0, blocked: 0 };
-  const compiled = compile(rules);
-  const patterns = [
-    ...rules.stub,
-    ...rules.block,
-    ...compiled.headerOrigins.map((origin) => `${origin}/*`)
-  ].map((urlPattern) => ({ urlPattern, requestStage: "Request" }));
-  if (patterns.length === 0) return stats;
-  const session = await browser.newBrowserCDPSession();
-  session.on("Fetch.requestPaused", (event) => {
-    void respond(session, event, rules, compiled, stats);
-  });
-  await session.send("Fetch.enable", { patterns });
-  return stats;
-}
-async function respond(session, { requestId, request }, rules, compiled, stats) {
-  try {
-    const action = classify(request.url, rules, compiled);
-    if (action === "stub") {
-      stats.stubbed++;
-      await session.send("Fetch.fulfillRequest", { requestId, responseCode: 204, responseHeaders: stubHeaders(request.headers) });
-    } else if (action === "block") {
-      stats.blocked++;
-      await session.send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" });
-    } else if (action === "headers") {
-      const extra = new Set(Object.keys(rules.headers).map((k) => k.toLowerCase()));
-      const kept = Object.entries(request.headers).filter(([name]) => !extra.has(name.toLowerCase()));
-      await session.send("Fetch.continueRequest", {
-        requestId,
-        headers: [...kept, ...Object.entries(rules.headers)].map(([name, value]) => ({ name, value }))
-      });
-    } else {
-      await session.send("Fetch.continueRequest", { requestId });
-    }
-  } catch {
-  }
-}
-
-// src/upload.ts
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
 
 // src/stats.ts
 var EXACT_MAX_N = 80;
@@ -20166,8 +20115,6 @@ function buildResult({
   pages,
   alpha,
   prodLoads = null,
-  stubbed = [],
-  blocked = [],
   durationMs = null,
   generatedAt = null,
   ...meta
@@ -20185,33 +20132,7 @@ function buildResult({
     ciRunUrl: meta.ciRunUrl,
     config: meta.config,
     pages: pages.map((p) => ({ ...summarisePage(p.path, p.loads, alpha), failures: p.failures })),
-    meta: { alpha, prodLoads, stubbed, blocked, durationMs, generatedAt, leboostUrl: null }
-  };
-}
-function toUploadPayload(result) {
-  return {
-    version: 1,
-    repo: result.repo,
-    prNumber: result.prNumber,
-    branch: result.branch,
-    headSha: result.headSha,
-    baseSha: result.baseSha,
-    baseUrl: result.baseUrl,
-    headUrl: result.headUrl,
-    prodUrl: result.prodUrl,
-    ciRunUrl: result.ciRunUrl,
-    config: result.config,
-    pages: result.pages.filter((page) => Object.keys(page.metrics).length > 0).map((page) => ({
-      path: page.path,
-      metrics: Object.fromEntries(
-        metricEntries(page).map(([metric, m]) => {
-          const { baseMedian, headMedian, deltaPct, pValue, shiftLow, shiftHigh, verdict } = m.summary;
-          const summary2 = { baseMedian, headMedian, deltaPct, pValue, shiftLow, shiftHigh, verdict };
-          if (m.prod) summary2.vsProd = m.summary.vsProd ?? null;
-          return [metric, m.prod ? { base: m.base, head: m.head, prod: m.prod, summary: summary2 } : { base: m.base, head: m.head, summary: summary2 }];
-        })
-      )
-    }))
+    meta: { alpha, prodLoads, durationMs, generatedAt }
   };
 }
 var MINUS = "\u2212";
@@ -20219,7 +20140,7 @@ var NBSP = "\xA0";
 var SIDES = ["base", "head", "prod"];
 var SIDE_LABEL = { base: "main", head: "this PR", prod: "prod" };
 var VERDICT_RANK = { regressed: 0, improved: 1, "no-change": 2 };
-var HISTORY_DOCS_URL = "https://github.com/WillSmithTE/leboost-pr-checks#keep-a-history-in-leboost";
+var ACTION_URL = "https://github.com/usero-feedback/pr-checks";
 var metricEntries = (page) => METRICS.flatMap((metric) => {
   const m = page.metrics[metric];
   return m ? [[metric, m]] : [];
@@ -20316,8 +20237,8 @@ function serverGap(page) {
 }
 var serverTime = (gap) => `<br><sub>${gap > 0 ? "plus" : "minus"}${NBSP}${formatValue("TTFB", Math.abs(gap))} server${NBSP}time</sub>`;
 function pageTable(page, hasProd) {
-  const header2 = ["Metric", "main", `this${NBSP}PR`, "Change"];
-  if (hasProd) header2.push("prod");
+  const header = ["Metric", "main", `this${NBSP}PR`, "Change"];
+  if (hasProd) header.push("prod");
   const gap = serverGap(page);
   const rows = sortedMetrics(page).map(([metric, m]) => {
     const s = m.summary;
@@ -20332,7 +20253,7 @@ function pageTable(page, hasProd) {
     if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian));
     return `| ${cells.join(" | ")} |`;
   });
-  return [`**${code(page.path)}**`, "", `| ${header2.join(" | ")} |`, `|${header2.map(() => "---").join("|")}|`, ...rows];
+  return [`**${code(page.path)}**`, "", `| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`, ...rows];
 }
 function serverLine(pages) {
   const gaps = pages.flatMap((page) => {
@@ -20345,7 +20266,7 @@ function serverLine(pages) {
   );
   return `This PR's preview server responded ${listJoin(parts)}. That is usually not the code, so it is left out of the result.`;
 }
-function renderComment(result, { failOnRegression = false, historyHint = false } = {}) {
+function renderComment(result, { failOnRegression = false } = {}) {
   const { config, meta } = result;
   const hasProd = Boolean(result.prodUrl);
   const pages = comparedPages(result).sort((a, b) => pageRank(a) - pageRank(b));
@@ -20370,7 +20291,6 @@ function renderComment(result, { failOnRegression = false, historyHint = false }
   }
   const gaps = gapLines(result);
   if (gaps.length > 0) lines2.push("**Incomplete data**", "", ...gaps, "");
-  if (meta.leboostUrl) lines2.push(`[Full run and trend in leboost PR checks](${meta.leboostUrl})`, "");
   if (pages.length > 0) {
     lines2.push(`<details${regressed.length > 0 ? " open" : ""}>`, "<summary>All metrics, significant changes in bold</summary>", "");
     for (const page of pages) lines2.push(...pageTable(page, hasProd), "");
@@ -20406,189 +20326,10 @@ function renderComment(result, { failOnRegression = false, historyHint = false }
   ];
   if (result.ciRunUrl) footer.push(`[CI run](${result.ciRunUrl})${sha ? ` for ${sha}` : ""}.`);
   else if (sha) footer.push(`Head ${sha}.`);
-  if (historyHint) footer.push(`To keep a history of these runs, add a [leboost key](${HISTORY_DOCS_URL}).`);
+  footer.push(`By [Usero PR checks](${ACTION_URL}).`);
   lines2.push(`<sub>${footer.join(" ")}</sub>`);
   return `${lines2.join("\n").trimEnd()}
 `;
-}
-
-// src/upload.ts
-var DEFAULT_LEBOOST_URL = "https://leboost.tech";
-var RETRY_DELAYS_MS = [2e3, 6e3];
-function uploadIdempotencyKey(env, result) {
-  if (!env.GITHUB_RUN_ID) return `local-${randomUUID2()}`;
-  const scope = [
-    env.GITHUB_JOB,
-    env.GITHUB_ACTION,
-    result.config.device,
-    result.baseUrl,
-    result.headUrl,
-    result.prodUrl,
-    result.pages.map((page) => page.path).join(" ")
-  ].join("\n");
-  const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
-  return `gh-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT ?? "1"}-${result.headSha.slice(0, 12)}-${hash}`;
-}
-var isRecord2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-function describeRejection(status, text) {
-  let body = null;
-  try {
-    body = JSON.parse(text);
-  } catch {
-  }
-  if (!isRecord2(body) || typeof body.error !== "string") {
-    const raw = text.trim().slice(0, 300);
-    return `leboost did not store this run (HTTP ${status})${raw ? `: ${raw}` : "."}`;
-  }
-  const lines2 = [`leboost did not store this run (HTTP ${status}): ${body.error}`];
-  if (Array.isArray(body.issues)) {
-    for (const issue2 of body.issues.slice(0, 10)) {
-      if (isRecord2(issue2) && typeof issue2.path === "string" && typeof issue2.message === "string") {
-        lines2.push(`  - ${issue2.path || "(body)"}: ${issue2.message}`);
-      }
-    }
-  }
-  if (typeof body.docs === "string") lines2.push(`Docs: ${body.docs}`);
-  return lines2.join("\n");
-}
-var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function uploadResult(result, { key, idempotencyKey, baseUrl, log: log2, fetchImpl = fetch, retryDelaysMs = RETRY_DELAYS_MS }) {
-  if (!key) return { status: "skipped" };
-  const payload = toUploadPayload(result);
-  if (payload.pages.length === 0) {
-    log2("Skipped the leboost upload: no page had enough good loads to compare.");
-    return { status: "skipped" };
-  }
-  if (!payload.repo) {
-    log2("Skipped the leboost upload: no repository name (GITHUB_REPOSITORY is not set).");
-    return { status: "skipped" };
-  }
-  const endpoint = `${(baseUrl ?? DEFAULT_LEBOOST_URL).replace(/\/+$/, "")}/api/lab-runs`;
-  const body = JSON.stringify(payload);
-  log2(`Uploading to leboost with Idempotency-Key ${idempotencyKey}.`);
-  let lastProblem = "";
-  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
-    if (attempt > 0) {
-      const delay = retryDelaysMs[attempt - 1] ?? 0;
-      log2(`${lastProblem} Retrying in ${Math.round(delay / 1e3)} s (attempt ${attempt + 1} of ${retryDelaysMs.length + 1}).`);
-      await sleep(delay);
-    }
-    let res;
-    try {
-      res = await fetchImpl(endpoint, {
-        method: "POST",
-        headers: { "X-Leboost-Key": key, "Idempotency-Key": idempotencyKey, "Content-Type": "application/json" },
-        body,
-        signal: AbortSignal.timeout(2e4)
-      });
-    } catch (err) {
-      lastProblem = `The leboost upload failed: ${err instanceof Error ? err.message : String(err)}.`;
-      continue;
-    }
-    const text = await res.text().catch(() => "");
-    if (res.ok) {
-      let parsed = null;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-      }
-      const url2 = isRecord2(parsed) && typeof parsed.url === "string" ? parsed.url : null;
-      const replayed = res.headers.get("Idempotent-Replayed") === "true" ? " (already stored by an earlier attempt)" : "";
-      log2(`Uploaded to leboost${replayed}${url2 ? `: ${url2}` : "."}`);
-      return { status: "uploaded", url: url2 };
-    }
-    const message = describeRejection(res.status, text);
-    if (res.status < 500) return { status: "failed", message };
-    lastProblem = message;
-  }
-  return { status: "failed", message: `${lastProblem} Gave up after ${retryDelaysMs.length + 1} attempts.` };
-}
-
-// src/inputs.ts
-var InputError = class extends Error {
-};
-var MAX_ROUNDS = 50;
-var words = (raw) => raw.split(/[\s,]+/).filter(Boolean);
-var lines = (raw) => raw.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
-function url(name, raw) {
-  try {
-    const u = new URL(raw);
-    if (u.protocol === "http:" || u.protocol === "https:") return raw;
-  } catch {
-  }
-  throw new InputError(`${name} must be an http(s) URL, got "${raw}".`);
-}
-function bool(name, raw, fallback) {
-  const v = raw.trim().toLowerCase();
-  if (v === "") return fallback;
-  if (v === "true") return true;
-  if (v === "false") return false;
-  throw new InputError(`${name} must be true or false, got "${raw}".`);
-}
-function int(name, raw, { min, max }) {
-  const n = Number(raw.trim());
-  if (!Number.isInteger(n) || n < min || n > max) throw new InputError(`${name} must be a whole number from ${min} to ${max}, got "${raw}".`);
-  return n;
-}
-function parseHeaders(raw) {
-  const out = {};
-  for (const line of lines(raw)) {
-    const at2 = line.indexOf(":");
-    const name = line.slice(0, at2).trim();
-    if (at2 < 1 || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) {
-      throw new InputError('headers expects one "Name: value" per line.');
-    }
-    out[name] = line.slice(at2 + 1).trim();
-  }
-  return out;
-}
-function parsePages(pathsRaw, interactRaw) {
-  const paths = words(pathsRaw);
-  if (paths.length === 0) paths.push("/");
-  for (const path of paths) {
-    if (!path.startsWith("/")) throw new InputError(`paths must start with /, got "${path}".`);
-  }
-  if (new Set(paths).size !== paths.length) throw new InputError("paths lists the same path twice.");
-  const interactions = /* @__PURE__ */ new Map();
-  for (const line of lines(interactRaw)) {
-    const at2 = line.indexOf("::");
-    if (at2 < 1) throw new InputError(`interact expects "PATH::SELECTOR" per line, got "${line}".`);
-    const path = line.slice(0, at2).trim();
-    if (!paths.includes(path)) throw new InputError(`interact names ${path}, which is not in paths.`);
-    interactions.set(path, line.slice(at2 + 2).trim());
-  }
-  return paths.map((path) => ({ path, interaction: interactions.get(path) ?? null }));
-}
-function parseInputs(get) {
-  const input = (name, fallback = "") => {
-    const v = get(name).trim();
-    return v === "" ? fallback : v;
-  };
-  const headRaw = input("head-url");
-  const baseRaw = input("base-url");
-  if (!headRaw) throw new InputError("head-url is required: the URL of this pull request's preview deployment.");
-  if (!baseRaw) throw new InputError("base-url is required: the URL to compare against, usually your main branch preview.");
-  const prodRaw = input("prod-url");
-  const deviceRaw = input("device", "mobile");
-  if (!(deviceRaw in DEVICES)) throw new InputError(`device must be mobile or desktop, got "${deviceRaw}".`);
-  const prRaw = input("pr-number");
-  return {
-    headUrl: url("head-url", headRaw),
-    baseUrl: url("base-url", baseRaw),
-    prodUrl: prodRaw ? url("prod-url", prodRaw) : null,
-    pages: parsePages(input("paths"), get("interact")),
-    rounds: int("rounds", input("rounds", "8"), { min: 3, max: MAX_ROUNDS }),
-    device: deviceRaw === "desktop" ? "desktop" : "mobile",
-    leboostKey: input("leboost-key"),
-    leboostUrl: url("leboost-url", input("leboost-url", DEFAULT_LEBOOST_URL)),
-    githubToken: input("github-token"),
-    comment: bool("comment", input("comment"), true),
-    stubPatterns: [...DEFAULT_BEACON_PATTERNS, ...words(input("stub-beacons"))],
-    blockPatterns: words(input("block-hosts")).flatMap(hostToPatterns),
-    headers: parseHeaders(get("headers")),
-    failOnRegression: bool("fail-on-regression", input("fail-on-regression"), false),
-    prNumber: prRaw ? int("pr-number", prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null
-  };
 }
 
 // src/run.ts
@@ -20650,13 +20391,33 @@ function formatMetrics(m) {
 // src/vitals.ts
 import { chromium } from "playwright-core";
 
+// src/headers.ts
+function originPattern(origin) {
+  return `${origin.replace(/[\\*?]/g, (ch) => `\\${ch}`)}/*`;
+}
+function withHeaders(request, extra) {
+  const names = new Set(Object.keys(extra).map((k) => k.toLowerCase()));
+  const kept = Object.entries(request).filter(([name]) => !names.has(name.toLowerCase()));
+  return [...kept, ...Object.entries(extra)].map(([name, value]) => ({ name, value }));
+}
+async function sendHeaders(browser, headers, origins) {
+  if (Object.keys(headers).length === 0 || origins.length === 0) return;
+  const session = await browser.newBrowserCDPSession();
+  session.on("Fetch.requestPaused", ({ requestId, request }) => {
+    session.send("Fetch.continueRequest", { requestId, headers: withHeaders(request.headers, headers) }).catch(() => {
+    });
+  });
+  const patterns = [...new Set(origins)].map((origin) => ({ urlPattern: originPattern(origin), requestStage: "Request" }));
+  await session.send("Fetch.enable", { patterns });
+}
+
 // src/measure.ts
 var import_web_vitals_umd = __toESM(require_web_vitals_umd(), 1);
 var LONG_TASK_MS = 50;
 function collector() {
   const vitals = {};
   const longtasks = [];
-  window.__leboostVitals = { vitals, longtasks };
+  window.__prChecksVitals = { vitals, longtasks };
   const opts = { reportAllChanges: true };
   const { onCLS, onFCP, onINP, onLCP, onTTFB } = window.webVitals;
   onLCP((m) => vitals.LCP = m.value, opts);
@@ -20718,7 +20479,7 @@ async function measureLoad(browser, url2, { device, interaction, settleMs, idleT
     }
     await page.evaluate(hidePage);
     await page.waitForTimeout(100);
-    const { vitals, longtasks, now } = await page.evaluate(() => ({ ...window.__leboostVitals, now: performance.now() }));
+    const { vitals, longtasks, now } = await page.evaluate(() => ({ ...window.__prChecksVitals, now: performance.now() }));
     const metrics = { ...vitals };
     if (typeof vitals.FCP === "number" && Number.isFinite(vitals.FCP)) metrics.TBT = totalBlockingTime(longtasks, vitals.FCP, now);
     if (!interaction) delete metrics.INP;
@@ -20746,7 +20507,7 @@ async function measureVitals(run2) {
   const results = [];
   try {
     log2(`Chrome ${browser.version()}`);
-    const intercepted = await installInterceptor(browser, run2.intercept);
+    await sendHeaders(browser, run2.headers, sides.map((s) => new URL(s.url).origin));
     const measure = (url2, page) => measureLoad(browser, url2, { device, interaction: page.interaction, settleMs: SETTLE_MS, idleTimeoutMs: IDLE_TIMEOUT_MS });
     const cold = sides.filter((s) => !s.context);
     log2(`Warming up ${cold.map((s) => s.name).join(" and ")}`);
@@ -20756,7 +20517,7 @@ async function measureVitals(run2) {
       const { samples, failures } = await samplePage({ page, sides, rounds, contextLoads: prodLoads ?? 0, measure, log: log2 });
       results.push({ path: page.path, loads: samples, failures });
     }
-    return { pages: results, prodLoads, intercepted };
+    return { pages: results, prodLoads };
   } finally {
     await browser.close();
   }
@@ -20766,7 +20527,7 @@ async function measureVitals(run2) {
 var log = (line) => info(line);
 function commentMarker(inputs) {
   const base = new URL(inputs.baseUrl);
-  return `<!-- leboost-pr-checks ${inputs.device} ${base.host}${base.pathname.replace(/\/+$/, "")} -->`;
+  return `<!-- usero-pr-checks ${inputs.device} ${base.host}${base.pathname.replace(/\/+$/, "")} -->`;
 }
 function notMeasuredComment(error2, ctx) {
   const where = ctx.ciRunUrl ? `The [CI run](${ctx.ciRunUrl}) has the details.` : "The job log has the details.";
@@ -20778,10 +20539,6 @@ function notMeasuredComment(error2, ctx) {
     `${where} Report only, this never blocks the PR.`,
     ""
   ].join("\n");
-}
-function uploadSummaryNote(message) {
-  const lead = "**leboost upload failed.** The results above are complete; only the history in leboost is missing this run.";
-  return [lead, "", "```text", message, "```", ""].join("\n");
 }
 async function resolveContext(inputs, env) {
   const ctx = contextFromEvent(env, readEvent(env));
@@ -20813,17 +20570,15 @@ async function run(env = process.env) {
     inputs = parseInputs((name) => getInput(name));
     executablePath = findChrome({ env });
   } catch (err) {
-    setFailed(err instanceof InputError ? err.message : `leboost-pr-checks: ${err instanceof Error ? err.message : String(err)}`);
+    setFailed(err instanceof InputError ? err.message : `Usero PR checks: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  if (inputs.leboostKey) setSecret(inputs.leboostKey);
   for (const value of Object.values(inputs.headers)) if (value) setSecret(value);
   const { ctx, api } = await resolveContext(inputs, env);
-  const outDir = join2(env.RUNNER_TEMP ?? tmpdir(), "leboost-pr-checks", env.GITHUB_ACTION ?? "run");
+  const outDir = join2(env.RUNNER_TEMP ?? tmpdir(), "usero-pr-checks", env.GITHUB_ACTION ?? "run");
   const started = Date.now();
   let result = null;
   let comment;
-  let uploadProblem = null;
   try {
     const device = DEVICES[inputs.device];
     const measured = await measureVitals({
@@ -20834,15 +20589,9 @@ async function run(env = process.env) {
       pages: inputs.pages,
       rounds: inputs.rounds,
       device: inputs.device,
-      intercept: {
-        stub: inputs.stubPatterns,
-        block: inputs.blockPatterns,
-        headers: inputs.headers,
-        headerOrigins: [inputs.headUrl, inputs.baseUrl, inputs.prodUrl].flatMap((u) => u ? [new URL(u).origin] : [])
-      },
+      headers: inputs.headers,
       log
     });
-    log(`Answered ${measured.intercepted.stubbed} analytics hits with an empty 204${measured.intercepted.blocked > 0 ? `, blocked ${measured.intercepted.blocked} requests` : ""}.`);
     result = buildResult({
       repo: ctx.repo,
       prNumber: ctx.prNumber,
@@ -20864,37 +20613,22 @@ async function run(env = process.env) {
       pages: measured.pages,
       prodLoads: measured.prodLoads,
       alpha: DEFAULT_ALPHA,
-      stubbed: inputs.stubPatterns,
-      blocked: inputs.blockPatterns,
       durationMs: Date.now() - started,
       generatedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
-    const upload = await uploadResult(result, {
-      key: inputs.leboostKey,
-      idempotencyKey: uploadIdempotencyKey(env, result),
-      baseUrl: inputs.leboostUrl,
-      log
-    });
-    if (upload.status === "uploaded") result.meta.leboostUrl = upload.url;
-    if (upload.status === "failed") {
-      warning(upload.message);
-      uploadProblem = upload.message;
-    }
-    comment = renderComment(result, { failOnRegression: inputs.failOnRegression, historyHint: !inputs.leboostKey });
+    comment = renderComment(result, { failOnRegression: inputs.failOnRegression });
   } catch (err) {
-    warning(`leboost-pr-checks could not finish measuring: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+    warning(`Usero PR checks could not finish measuring: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
     comment = notMeasuredComment(firstLine(err), ctx);
   }
   const jsonPath = await writeFiles(outDir, result, comment);
   log(`
 ${comment}`);
-  await summary.addRaw(uploadProblem ? `${comment}
-${uploadSummaryNote(uploadProblem)}` : comment, true).write();
+  await summary.addRaw(comment, true).write();
   await postComment(inputs, ctx, api, comment);
   const { regressions, improvements } = result ? countVerdicts(result) : { regressions: 0, improvements: 0 };
   setOutput("regressions", regressions);
   setOutput("improvements", improvements);
-  setOutput("run-url", result?.meta.leboostUrl ?? "");
   setOutput("json-path", jsonPath ?? "");
   log(`Finished in ${Math.round((Date.now() - started) / 1e3)} s.`);
   if (inputs.failOnRegression && regressions > 0) setFailed(`${regressions} web vitals ${regressions === 1 ? "regression" : "regressions"} vs main.`);
@@ -20902,6 +20636,6 @@ ${uploadSummaryNote(uploadProblem)}` : comment, true).write();
 
 // src/index.ts
 run().catch((err) => {
-  warning(`leboost-pr-checks crashed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+  warning(`Usero PR checks crashed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
 });
 /*! For license information please see index.js.LEGAL.txt */

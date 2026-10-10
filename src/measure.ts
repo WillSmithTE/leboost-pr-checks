@@ -15,7 +15,7 @@ interface Collected {
 declare global {
 	interface Window {
 		webVitals: typeof import('web-vitals')
-		__leboostVitals: { vitals: Metrics; longtasks: [number, number][] }
+		__prChecksVitals: { vitals: Metrics; longtasks: [number, number][] }
 	}
 }
 
@@ -23,7 +23,7 @@ declare global {
 function collector() {
 	const vitals: Metrics = {}
 	const longtasks: [number, number][] = []
-	window.__leboostVitals = { vitals, longtasks }
+	window.__prChecksVitals = { vitals, longtasks }
 	const opts = { reportAllChanges: true }
 	const { onCLS, onFCP, onINP, onLCP, onTTFB } = window.webVitals
 	onLCP(m => (vitals.LCP = m.value), opts)
@@ -98,7 +98,7 @@ export async function measureLoad(browser: Browser, url: string, { device, inter
 
 		await page.evaluate(hidePage)
 		await page.waitForTimeout(100)
-		const { vitals, longtasks, now } = await page.evaluate((): Collected => ({ ...window.__leboostVitals, now: performance.now() }))
+		const { vitals, longtasks, now } = await page.evaluate((): Collected => ({ ...window.__prChecksVitals, now: performance.now() }))
 		const metrics: Metrics = { ...vitals }
 		if (typeof vitals.FCP === 'number' && Number.isFinite(vitals.FCP)) metrics.TBT = totalBlockingTime(longtasks, vitals.FCP, now)
 		if (!interaction) delete metrics.INP

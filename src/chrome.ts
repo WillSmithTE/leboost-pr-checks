@@ -19,7 +19,7 @@ const KNOWN_PATHS = [
 
 export const CHROME_NOT_FOUND = [
 	'No Chrome or Chromium found. GitHub-hosted ubuntu-latest, windows-latest and macos-latest runners have Google Chrome',
-	'preinstalled. On a self-hosted runner or in a container, add this step before leboost-pr-checks:',
+	'preinstalled. On a self-hosted runner or in a container, add this step before usero-feedback/pr-checks:',
 	'  - uses: browser-actions/setup-chrome@v2',
 	'    id: chrome',
 	'and pass its path with `env: CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}`.',

@@ -1,4 +1,4 @@
-// The GitHub Action: measure, upload, write the job summary, comment on the PR, set outputs.
+// The GitHub Action: measure, write the job summary, comment on the PR, set outputs.
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,7 +9,6 @@ import { contextFromEvent, type Env, findPullRequest, GitHubApi, readEvent, type
 import { InputError, type Inputs, parseInputs } from './inputs'
 import { buildResult, countVerdicts, renderComment, type RunResult } from './report'
 import { firstLine } from './run'
-import { uploadIdempotencyKey, uploadResult } from './upload'
 import { measureVitals } from './vitals'
 
 const log = (line: string): void => core.info(line)
@@ -17,7 +16,7 @@ const log = (line: string): void => core.info(line)
 // One comment per device and base URL, so a mobile and a desktop job on the same PR keep separate comments.
 export function commentMarker(inputs: Pick<Inputs, 'device' | 'baseUrl'>): string {
 	const base = new URL(inputs.baseUrl)
-	return `<!-- leboost-pr-checks ${inputs.device} ${base.host}${base.pathname.replace(/\/+$/, '')} -->`
+	return `<!-- usero-pr-checks ${inputs.device} ${base.host}${base.pathname.replace(/\/+$/, '')} -->`
 }
 
 export function notMeasuredComment(error: string, ctx: Pick<RunContext, 'ciRunUrl'>): string {
@@ -30,12 +29,6 @@ export function notMeasuredComment(error: string, ctx: Pick<RunContext, 'ciRunUr
 		`${where} Report only, this never blocks the PR.`,
 		'',
 	].join('\n')
-}
-
-// The job summary gets leboost's message verbatim; the PR comment stays about the PR.
-export function uploadSummaryNote(message: string): string {
-	const lead = '**leboost upload failed.** The results above are complete; only the history in leboost is missing this run.'
-	return [lead, '', '```text', message, '```', ''].join('\n')
 }
 
 async function resolveContext(inputs: Inputs, env: Env): Promise<{ ctx: RunContext; api: GitHubApi | null }> {
@@ -71,18 +64,16 @@ export async function run(env: Env = process.env): Promise<void> {
 		executablePath = findChrome({ env })
 	} catch (err) {
 		// A setup mistake fails the step, so a first install shows what to fix instead of passing silently.
-		core.setFailed(err instanceof InputError ? err.message : `leboost-pr-checks: ${err instanceof Error ? err.message : String(err)}`)
+		core.setFailed(err instanceof InputError ? err.message : `Usero PR checks: ${err instanceof Error ? err.message : String(err)}`)
 		return
 	}
-	if (inputs.leboostKey) core.setSecret(inputs.leboostKey)
 	for (const value of Object.values(inputs.headers)) if (value) core.setSecret(value)
 
 	const { ctx, api } = await resolveContext(inputs, env)
-	const outDir = join(env.RUNNER_TEMP ?? tmpdir(), 'leboost-pr-checks', env.GITHUB_ACTION ?? 'run')
+	const outDir = join(env.RUNNER_TEMP ?? tmpdir(), 'usero-pr-checks', env.GITHUB_ACTION ?? 'run')
 	const started = Date.now()
 	let result: RunResult | null = null
 	let comment: string
-	let uploadProblem: string | null = null
 	try {
 		const device = DEVICES[inputs.device]
 		const measured = await measureVitals({
@@ -93,15 +84,9 @@ export async function run(env: Env = process.env): Promise<void> {
 			pages: inputs.pages,
 			rounds: inputs.rounds,
 			device: inputs.device,
-			intercept: {
-				stub: inputs.stubPatterns,
-				block: inputs.blockPatterns,
-				headers: inputs.headers,
-				headerOrigins: [inputs.headUrl, inputs.baseUrl, inputs.prodUrl].flatMap(u => (u ? [new URL(u).origin] : [])),
-			},
+			headers: inputs.headers,
 			log,
 		})
-		log(`Answered ${measured.intercepted.stubbed} analytics hits with an empty 204${measured.intercepted.blocked > 0 ? `, blocked ${measured.intercepted.blocked} requests` : ''}.`)
 		result = buildResult({
 			repo: ctx.repo,
 			prNumber: ctx.prNumber,
@@ -123,37 +108,23 @@ export async function run(env: Env = process.env): Promise<void> {
 			pages: measured.pages,
 			prodLoads: measured.prodLoads,
 			alpha: DEFAULT_ALPHA,
-			stubbed: inputs.stubPatterns,
-			blocked: inputs.blockPatterns,
 			durationMs: Date.now() - started,
 			generatedAt: new Date().toISOString(),
 		})
-		const upload = await uploadResult(result, {
-			key: inputs.leboostKey,
-			idempotencyKey: uploadIdempotencyKey(env, result),
-			baseUrl: inputs.leboostUrl,
-			log,
-		})
-		if (upload.status === 'uploaded') result.meta.leboostUrl = upload.url
-		if (upload.status === 'failed') {
-			core.warning(upload.message)
-			uploadProblem = upload.message
-		}
-		comment = renderComment(result, { failOnRegression: inputs.failOnRegression, historyHint: !inputs.leboostKey })
+		comment = renderComment(result, { failOnRegression: inputs.failOnRegression })
 	} catch (err) {
-		core.warning(`leboost-pr-checks could not finish measuring: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
+		core.warning(`Usero PR checks could not finish measuring: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
 		comment = notMeasuredComment(firstLine(err), ctx)
 	}
 
 	const jsonPath = await writeFiles(outDir, result, comment)
 	log(`\n${comment}`)
-	await core.summary.addRaw(uploadProblem ? `${comment}\n${uploadSummaryNote(uploadProblem)}` : comment, true).write()
+	await core.summary.addRaw(comment, true).write()
 	await postComment(inputs, ctx, api, comment)
 
 	const { regressions, improvements } = result ? countVerdicts(result) : { regressions: 0, improvements: 0 }
 	core.setOutput('regressions', regressions)
 	core.setOutput('improvements', improvements)
-	core.setOutput('run-url', result?.meta.leboostUrl ?? '')
 	core.setOutput('json-path', jsonPath ?? '')
 	log(`Finished in ${Math.round((Date.now() - started) / 1000)} s.`)
 	if (inputs.failOnRegression && regressions > 0) core.setFailed(`${regressions} web vitals ${regressions === 1 ? 'regression' : 'regressions'} vs main.`)

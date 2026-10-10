@@ -1,5 +1,4 @@
 // Presets and verdict thresholds. Rationale for each number is in README.md, "Method".
-import beacons from '../beacon-patterns.json'
 
 export const METRICS = ['LCP', 'FCP', 'CLS', 'TBT', 'TTFB', 'INP'] as const
 export type MetricName = (typeof METRICS)[number]
@@ -66,6 +65,3 @@ export const DEFAULT_ALPHA = 0.05
 export const DEFAULT_PROD_LOADS = 3
 export const SETTLE_MS = 500
 export const IDLE_TIMEOUT_MS = 2000
-
-// Analytics and RUM data hits, answered with an empty 204. The list lives in beacon-patterns.json so other runners can share it.
-export const DEFAULT_BEACON_PATTERNS: readonly string[] = Object.values(beacons.patterns).flat()

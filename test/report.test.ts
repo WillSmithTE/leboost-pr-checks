@@ -9,7 +9,6 @@ import {
 	renderComment,
 	type RunResult,
 	summarisePage,
-	toUploadPayload,
 } from '../src/report'
 import type { Load, Metrics } from '../src/run'
 import fixture from './fixtures/run.json'
@@ -46,34 +45,9 @@ describe('buildResult', () => {
 	it('counts verdicts for the outputs', () => {
 		expect(countVerdicts(result)).toEqual({ regressions: 2, improvements: 2 })
 	})
-})
 
-describe('toUploadPayload', () => {
-	it('emits exactly the v1 contract fields', () => {
-		const payload = toUploadPayload(build())
-		expect(Object.keys(payload).sort()).toEqual(
-			['baseSha', 'baseUrl', 'branch', 'ciRunUrl', 'config', 'headSha', 'headUrl', 'pages', 'prNumber', 'prodUrl', 'repo', 'version'].sort(),
-		)
-		const lcp = payload.pages[1].metrics.LCP
-		expect(Object.keys(lcp ?? {}).sort()).toEqual(['base', 'head', 'prod', 'summary'])
-		expect(Object.keys(lcp?.summary ?? {}).sort()).toEqual(
-			['baseMedian', 'deltaPct', 'headMedian', 'pValue', 'shiftHigh', 'shiftLow', 'verdict', 'vsProd'].sort(),
-		)
-		expect(Object.keys(payload.pages[0].metrics.FCP?.summary.vsProd ?? {}).sort()).toEqual(
-			['deltaPct', 'pValue', 'prodMedian', 'shiftHigh', 'shiftLow', 'verdict'].sort(),
-		)
-	})
-
-	it('leaves out pages with nothing compared, which the contract would reject', () => {
-		expect(toUploadPayload(build()).pages.map(p => p.path)).toEqual(['/docs', '/'])
-	})
-
-	it('leaves prod fields out entirely when no prod URL was given', () => {
-		const pages = FIXTURE_PAGES.map(p => ({ ...p, loads: { base: p.loads.base, head: p.loads.head } }))
-		const payload = toUploadPayload(build({ prodUrl: null, pages }))
-		expect(payload.prodUrl).toBeNull()
-		expect(payload.pages[0].metrics.FCP).not.toHaveProperty('prod')
-		expect(payload.pages[0].metrics.FCP?.summary).not.toHaveProperty('vsProd')
+	it('keeps the test settings and run timing in meta', () => {
+		expect(result.meta).toEqual({ alpha: 0.05, prodLoads: null, durationMs: 1000, generatedAt: '2026-10-09T00:00:00Z' })
 	})
 })
 
@@ -96,7 +70,6 @@ const DOCS: Centre = { LCP: 2010, FCP: 1700, CLS: 0, TBT: 0, TTFB: 180 }
 // Prod loads third-party tags the previews do not, so its TBT is far higher.
 const PROD_HOME: Centre = { ...HOME, TBT: 740, TTFB: 130 }
 const PROD_DOCS: Centre = { ...DOCS, TBT: 520, TTFB: 128 }
-const LEBOOST_URL = 'https://leboost.tech/dashboard/shop.example.com/lab-runs/clx42run'
 
 interface ScenarioOptions {
 	home?: Centre
@@ -105,10 +78,9 @@ interface ScenarioOptions {
 	missing?: Record<string, Partial<Record<keyof Centre, number[]>>>
 	// Every PR load failed, as when the preview 500s.
 	headDown?: boolean
-	leboostUrl?: string | null
 }
 
-function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDown = false, leboostUrl = null }: ScenarioOptions): RunResult {
+function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDown = false }: ScenarioOptions): RunResult {
 	const headFailures = headDown ? Array<string>(8).fill('HTTP 500') : []
 	const page = (path: string, base: Centre, head: Centre, prodCentre: Centre): PageInput => {
 		const headLoads: Load[] = headDown ? Array<Load>(8).fill(null) : loads(head, missing[path], HEAD_JITTER)
@@ -119,14 +91,12 @@ function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDow
 			failures: { base: [], head: headFailures, prod: [] },
 		}
 	}
-	const result = build({
+	return build({
 		prodUrl: prod ? 'https://shop.example.com' : null,
 		prodLoads: prod ? 3 : null,
 		config: { ...META.config, pairs: 8 },
 		pages: [page('/', HOME, home, PROD_HOME), page('/docs', DOCS, docs, PROD_DOCS)],
 	})
-	result.meta.leboostUrl = leboostUrl
-	return result
 }
 
 // A run where raw LCP on `/` went 5.14 s to 5.46 s, all but ~10 ms of it the PR preview's slower first byte.
@@ -175,15 +145,11 @@ function slowPreviewServer(): RunResult {
 }
 
 const SCENARIOS: Record<string, RunResult> = {
-	clean: scenario({ leboostUrl: LEBOOST_URL }),
+	clean: scenario({}),
 	'slow-preview-server': slowPreviewServer(),
 	'one-regression': scenario({ home: { ...HOME, LCP: 2950 } }),
-	mixed: (() => {
-		const result = build()
-		result.meta.leboostUrl = LEBOOST_URL
-		return result
-	})(),
-	'missing-prod': scenario({ prod: false, docs: { ...DOCS, TBT: 80 }, leboostUrl: LEBOOST_URL }),
+	mixed: build(),
+	'missing-prod': scenario({ prod: false, docs: { ...DOCS, TBT: 80 } }),
 	'dropped-metric': scenario({ missing: { '/': { LCP: [0, 2, 3, 4, 5, 7] } } }),
 	'not-compared': scenario({ prod: false, headDown: true }),
 }
@@ -210,6 +176,7 @@ describe('renderComment', () => {
 			expect(md.startsWith('### Lab web vitals: ')).toBe(true)
 			expect(md).toContain('never fails the build')
 			expect(prose(md)).not.toMatch(/—|--|genuinely|truly|simply|really/)
+			expect(md).not.toMatch(/\p{Extended_Pictographic}/u)
 		}
 	})
 
@@ -269,15 +236,10 @@ describe('renderComment', () => {
 		expect(md).not.toContain('slip through')
 	})
 
-	it('links leboost PR checks only when the upload returned a URL', () => {
-		expect(render(SCENARIOS.clean)).toContain(`[Full run and trend in leboost PR checks](${LEBOOST_URL})`)
-		expect(render(SCENARIOS['one-regression'])).not.toContain('leboost')
-	})
-
-	it('adds one quiet history line only when asked, and says so when the job fails on regressions', () => {
-		const hint = render(SCENARIOS['one-regression'], { historyHint: true })
-		expect(hint).toContain('To keep a history of these runs, add a [leboost key](https://github.com/WillSmithTE/leboost-pr-checks#keep-a-history-in-leboost).</sub>')
-		expect(hint.match(/leboost/g)).toHaveLength(3)
+	it('ends the footer with one link to the action, and says so when the job fails on regressions', () => {
+		const md = render(SCENARIOS['one-regression'])
+		expect(md).toMatch(/ By \[Usero PR checks\]\(https:\/\/github\.com\/usero-feedback\/pr-checks\)\.<\/sub>\n$/)
+		expect(md.match(/Usero/g)).toHaveLength(1)
 		const failing = render(SCENARIOS['one-regression'], { failOnRegression: true })
 		expect(failing).toContain('<sub>Fails the job on a regression.')
 		expect(failing).not.toContain('never fails the build')
@@ -301,7 +263,7 @@ describe('renderComment', () => {
 
 		// Main's server answers 1.3 s slower; the paint after it is the same.
 		const slowMain = page(side(1500, 3900), side(150, 3900))
-		// TTFB is context only: significant here, yet never a verdict, in the comment or in the upload.
+		// TTFB is context only: significant here, yet never a verdict, in the comment or in vitals.json.
 		expect(slowMain.metrics.TTFB?.summary).toMatchObject({ verdict: 'no-change', baseMedian: 1507.5, headMedian: 157.5 })
 		expect(slowMain.metrics.TTFB?.summary.pValue).toBeLessThan(0.001)
 		// Medians include the jitter: raw 5400 + 10.5 and 4050 + 10.5, after the first byte 3900 + 3 on both sides.
@@ -348,7 +310,7 @@ describe('renderComment', () => {
 		expect(md).toContain('<sub>minus 1.20 s server time</sub>')
 	})
 
-	it('uploads TTFB with its samples and test but a no-change verdict, for prod too', () => {
+	it('keeps TTFB with its samples and test but a no-change verdict, for prod too', () => {
 		const load = (ttfb: number): Metrics => ({ TTFB: ttfb, LCP: 4000, FCP: 4000 })
 		const pages: PageInput[] = [
 			{
@@ -357,7 +319,7 @@ describe('renderComment', () => {
 				failures: {},
 			},
 		]
-		const ttfb = toUploadPayload(build({ pages })).pages[0].metrics.TTFB
+		const ttfb = build({ pages }).pages[0].metrics.TTFB
 		expect(ttfb?.head).toEqual([100, 120, 110])
 		expect(ttfb?.summary).toMatchObject({ verdict: 'no-change', baseMedian: 1550, headMedian: 110 })
 		expect(ttfb?.summary.pValue).toBeCloseTo(0.05, 6)

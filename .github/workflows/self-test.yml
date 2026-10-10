@@ -2,6 +2,7 @@ name: Self-test
 
 # Runs the action from this commit against a public site as an A/A check: the same URL on both sides must
 # report no change. The read-only token also exercises the path a fork PR takes (no comment, job summary only).
+# example.com runs no analytics, so these test loads count nowhere.
 on:
   push:
     branches: [main]
@@ -13,7 +14,7 @@ permissions:
 
 jobs:
   a-a:
-    name: A/A on leboost.tech
+    name: A/A on example.com
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -21,8 +22,8 @@ jobs:
       - id: vitals
         uses: ./
         with:
-          head-url: https://leboost.tech
-          base-url: https://leboost.tech
+          head-url: https://example.com
+          base-url: https://example.com
           paths: /
       - name: Same URL on both sides reports no change
         env:

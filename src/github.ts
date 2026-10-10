@@ -96,7 +96,7 @@ export class GitHubApi {
 			Authorization: `Bearer ${this.token}`,
 			Accept: 'application/vnd.github+json',
 			'X-GitHub-Api-Version': '2022-11-28',
-			'User-Agent': 'leboost-pr-checks',
+			'User-Agent': 'usero-pr-checks',
 		}
 		if (body) headers['Content-Type'] = 'application/json'
 		const res = await this.fetchImpl(`${this.apiUrl}${path}`, {

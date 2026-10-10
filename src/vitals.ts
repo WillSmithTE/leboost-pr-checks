@@ -1,7 +1,7 @@
 // One full run: warm up the previews, then interleaved rounds per page, in a single headless Chrome.
 import { chromium } from 'playwright-core'
 import { DEFAULT_PROD_LOADS, DEVICES, type DeviceName, IDLE_TIMEOUT_MS, SETTLE_MS } from './config'
-import { type InterceptRules, type InterceptStats, installInterceptor } from './intercept'
+import { sendHeaders } from './headers'
 import { measureLoad } from './measure'
 import type { PageInput } from './report'
 import { type Log, type PageSpec, type Side, samplePage, warmUp } from './run'
@@ -14,14 +14,14 @@ export interface VitalsRun {
 	pages: readonly PageSpec[]
 	rounds: number
 	device: DeviceName
-	intercept: InterceptRules
+	// Sent only to the head, base and prod origins.
+	headers: Record<string, string>
 	log: Log
 }
 
 export interface VitalsOutput {
 	pages: PageInput[]
 	prodLoads: number | null
-	intercepted: InterceptStats
 }
 
 export async function measureVitals(run: VitalsRun): Promise<VitalsOutput> {
@@ -38,7 +38,7 @@ export async function measureVitals(run: VitalsRun): Promise<VitalsOutput> {
 	const results: PageInput[] = []
 	try {
 		log(`Chrome ${browser.version()}`)
-		const intercepted = await installInterceptor(browser, run.intercept)
+		await sendHeaders(browser, run.headers, sides.map(s => new URL(s.url).origin))
 		const measure = (url: string, page: PageSpec) =>
 			measureLoad(browser, url, { device, interaction: page.interaction, settleMs: SETTLE_MS, idleTimeoutMs: IDLE_TIMEOUT_MS })
 		// Prod is a warm production deployment; only the previews need waking.
@@ -50,7 +50,7 @@ export async function measureVitals(run: VitalsRun): Promise<VitalsOutput> {
 			const { samples, failures } = await samplePage({ page, sides, rounds, contextLoads: prodLoads ?? 0, measure, log })
 			results.push({ path: page.path, loads: samples, failures })
 		}
-		return { pages: results, prodLoads, intercepted }
+		return { pages: results, prodLoads }
 	} finally {
 		await browser.close()
 	}

@@ -4,7 +4,7 @@ A GitHub Action that loads your pull request's preview and your main branch's pr
 measures lab web vitals on both (LCP, FCP, CLS, TBT, TTFB, optionally INP). A significance test decides what changed, and one
 PR comment reports only the changes larger than run-to-run noise. It never fails your build unless you ask it to.
 
-<img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main. LCP on / went from 807 ms to 1.34 s after the first byte, +531 ms." width="632">
+<img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main, with a diff line reading LCP on / 529 ms slower (65%), and the table of every metric below." width="548">
 
 This is a pre-release. Inputs may change before v1, so pin `@v0` and check the release notes when you update.
 

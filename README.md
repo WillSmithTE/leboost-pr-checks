@@ -40,10 +40,15 @@ it at a site that reports to your production analytics.
 
 - The comment's title states the result: "no significant change vs main", "1 regression vs main", "2 regressions, 1 improvement
   vs main".
-- Each regression or improvement gets one line with the metric, the page and the size of the change.
-- When nothing moved, one line says what a run of this size can still miss, for example "an LCP change under 110 ms".
+- Under it, a `diff` block with one line per change: slower on a red `-` line, faster on a green `+` line, and the word
+  "slower" or "faster" on every line, so it reads the same in a notification email where colour is gone.
+- When nothing moved there is no block. One line says what a run of this size can still miss, for example "an LCP change
+  under 110 ms".
 - Failed loads, and pages or metrics without enough good loads, are listed too.
-- A table with every metric per page, folded away unless something regressed.
+- A table with every metric per page, folded away unless something regressed. Only the significant rows say Slower or
+  Faster.
+- A trend chart of main's recent runs with this PR's value beside them is designed ([spec](docs/chart-spec.md)) and not yet
+  switched on.
 
 The [demo repository](https://github.com/usero-feedback/pr-checks-demo/pulls?q=is%3Apr) has a PR with a deliberate slow hero
 image and a PR that changes nothing, with the comment this action posted on each.

@@ -9,7 +9,7 @@ import { contextFromEvent, type Env, findPullRequest, GitHubApi, readEvent, type
 import { InputError, type Inputs, parseInputs } from './inputs'
 import { buildResult, countVerdicts, renderComment, type RunResult } from './report'
 import { firstLine } from './run'
-import { uploadResult } from './upload'
+import { uploadIdempotencyKey, uploadResult } from './upload'
 import { measureVitals } from './vitals'
 
 const log = (line: string): void => core.info(line)
@@ -30,6 +30,12 @@ export function notMeasuredComment(error: string, ctx: Pick<RunContext, 'ciRunUr
 		`${where} Report only, this never blocks the PR.`,
 		'',
 	].join('\n')
+}
+
+// The job summary gets leboost's message verbatim; the PR comment stays about the PR.
+export function uploadSummaryNote(message: string): string {
+	const lead = '**leboost upload failed.** The results above are complete; only the history in leboost is missing this run.'
+	return [lead, '', '```text', message, '```', ''].join('\n')
 }
 
 async function resolveContext(inputs: Inputs, env: Env): Promise<{ ctx: RunContext; api: GitHubApi | null }> {
@@ -76,6 +82,7 @@ export async function run(env: Env = process.env): Promise<void> {
 	const started = Date.now()
 	let result: RunResult | null = null
 	let comment: string
+	let uploadProblem: string | null = null
 	try {
 		const device = DEVICES[inputs.device]
 		const measured = await measureVitals({
@@ -121,7 +128,17 @@ export async function run(env: Env = process.env): Promise<void> {
 			durationMs: Date.now() - started,
 			generatedAt: new Date().toISOString(),
 		})
-		result.meta.leboostUrl = await uploadResult(result, { key: inputs.leboostKey, baseUrl: inputs.leboostUrl, log })
+		const upload = await uploadResult(result, {
+			key: inputs.leboostKey,
+			idempotencyKey: uploadIdempotencyKey(env, result),
+			baseUrl: inputs.leboostUrl,
+			log,
+		})
+		if (upload.status === 'uploaded') result.meta.leboostUrl = upload.url
+		if (upload.status === 'failed') {
+			core.warning(upload.message)
+			uploadProblem = upload.message
+		}
 		comment = renderComment(result, { failOnRegression: inputs.failOnRegression, historyHint: !inputs.leboostKey })
 	} catch (err) {
 		core.warning(`leboost-pr-checks could not finish measuring: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
@@ -130,7 +147,7 @@ export async function run(env: Env = process.env): Promise<void> {
 
 	const jsonPath = await writeFiles(outDir, result, comment)
 	log(`\n${comment}`)
-	await core.summary.addRaw(comment, true).write()
+	await core.summary.addRaw(uploadProblem ? `${comment}\n${uploadSummaryNote(uploadProblem)}` : comment, true).write()
 	await postComment(inputs, ctx, api, comment)
 
 	const { regressions, improvements } = result ? countVerdicts(result) : { regressions: 0, improvements: 0 }

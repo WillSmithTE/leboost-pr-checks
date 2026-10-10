@@ -19930,6 +19930,9 @@ async function respond(session, { requestId, request }, rules, compiled, stats) 
   }
 }
 
+// src/upload.ts
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+
 // src/stats.ts
 var EXACT_MAX_N = 80;
 var finite = (values2) => values2.filter((v) => typeof v === "number" && Number.isFinite(v));
@@ -20411,42 +20414,94 @@ function renderComment(result, { failOnRegression = false, historyHint = false }
 
 // src/upload.ts
 var DEFAULT_LEBOOST_URL = "https://leboost.tech";
-var HINTS = {
-  401: "leboost did not recognise the key. Copy it again from your site's PR checks page in leboost and update the secret.",
-  413: "the run is larger than leboost accepts. Measure fewer paths or rounds."
-};
-async function uploadResult(result, { key, baseUrl, log: log2, fetchImpl = fetch }) {
-  if (!key) return null;
+var RETRY_DELAYS_MS = [2e3, 6e3];
+function uploadIdempotencyKey(env, result) {
+  if (!env.GITHUB_RUN_ID) return `local-${randomUUID2()}`;
+  const scope = [
+    env.GITHUB_JOB,
+    env.GITHUB_ACTION,
+    result.config.device,
+    result.baseUrl,
+    result.headUrl,
+    result.prodUrl,
+    result.pages.map((page) => page.path).join(" ")
+  ].join("\n");
+  const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
+  return `gh-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT ?? "1"}-${result.headSha.slice(0, 12)}-${hash}`;
+}
+var isRecord2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function describeRejection(status, text) {
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+  }
+  if (!isRecord2(body) || typeof body.error !== "string") {
+    const raw = text.trim().slice(0, 300);
+    return `leboost did not store this run (HTTP ${status})${raw ? `: ${raw}` : "."}`;
+  }
+  const lines2 = [`leboost did not store this run (HTTP ${status}): ${body.error}`];
+  if (Array.isArray(body.issues)) {
+    for (const issue2 of body.issues.slice(0, 10)) {
+      if (isRecord2(issue2) && typeof issue2.path === "string" && typeof issue2.message === "string") {
+        lines2.push(`  - ${issue2.path || "(body)"}: ${issue2.message}`);
+      }
+    }
+  }
+  if (typeof body.docs === "string") lines2.push(`Docs: ${body.docs}`);
+  return lines2.join("\n");
+}
+var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function uploadResult(result, { key, idempotencyKey, baseUrl, log: log2, fetchImpl = fetch, retryDelaysMs = RETRY_DELAYS_MS }) {
+  if (!key) return { status: "skipped" };
   const payload = toUploadPayload(result);
   if (payload.pages.length === 0) {
     log2("Skipped the leboost upload: no page had enough good loads to compare.");
-    return null;
+    return { status: "skipped" };
   }
   if (!payload.repo) {
     log2("Skipped the leboost upload: no repository name (GITHUB_REPOSITORY is not set).");
-    return null;
+    return { status: "skipped" };
   }
   const endpoint = `${(baseUrl ?? DEFAULT_LEBOOST_URL).replace(/\/+$/, "")}/api/lab-runs`;
-  try {
-    const res = await fetchImpl(endpoint, {
-      method: "POST",
-      headers: { "X-Leboost-Key": key, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(2e4)
-    });
-    if (!res.ok) {
-      const body2 = (await res.text()).slice(0, 500);
-      log2(`Warning: the leboost upload failed with HTTP ${res.status}${HINTS[res.status] ? `: ${HINTS[res.status]}` : "."} Response: ${body2}`);
-      return null;
+  const body = JSON.stringify(payload);
+  log2(`Uploading to leboost with Idempotency-Key ${idempotencyKey}.`);
+  let lastProblem = "";
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    if (attempt > 0) {
+      const delay = retryDelaysMs[attempt - 1] ?? 0;
+      log2(`${lastProblem} Retrying in ${Math.round(delay / 1e3)} s (attempt ${attempt + 1} of ${retryDelaysMs.length + 1}).`);
+      await sleep(delay);
     }
-    const body = await res.json().catch(() => null);
-    const url2 = body !== null && typeof body === "object" && "url" in body && typeof body.url === "string" ? body.url : null;
-    log2(`Uploaded to leboost${url2 ? `: ${url2}` : "."}`);
-    return url2;
-  } catch (err) {
-    log2(`Warning: the leboost upload failed: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
+    let res;
+    try {
+      res = await fetchImpl(endpoint, {
+        method: "POST",
+        headers: { "X-Leboost-Key": key, "Idempotency-Key": idempotencyKey, "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(2e4)
+      });
+    } catch (err) {
+      lastProblem = `The leboost upload failed: ${err instanceof Error ? err.message : String(err)}.`;
+      continue;
+    }
+    const text = await res.text().catch(() => "");
+    if (res.ok) {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+      }
+      const url2 = isRecord2(parsed) && typeof parsed.url === "string" ? parsed.url : null;
+      const replayed = res.headers.get("Idempotent-Replayed") === "true" ? " (already stored by an earlier attempt)" : "";
+      log2(`Uploaded to leboost${replayed}${url2 ? `: ${url2}` : "."}`);
+      return { status: "uploaded", url: url2 };
+    }
+    const message = describeRejection(res.status, text);
+    if (res.status < 500) return { status: "failed", message };
+    lastProblem = message;
   }
+  return { status: "failed", message: `${lastProblem} Gave up after ${retryDelaysMs.length + 1} attempts.` };
 }
 
 // src/inputs.ts
@@ -20724,6 +20779,10 @@ function notMeasuredComment(error2, ctx) {
     ""
   ].join("\n");
 }
+function uploadSummaryNote(message) {
+  const lead = "**leboost upload failed.** The results above are complete; only the history in leboost is missing this run.";
+  return [lead, "", "```text", message, "```", ""].join("\n");
+}
 async function resolveContext(inputs, env) {
   const ctx = contextFromEvent(env, readEvent(env));
   const api = inputs.githubToken ? new GitHubApi(inputs.githubToken, ctx.apiUrl) : null;
@@ -20764,6 +20823,7 @@ async function run(env = process.env) {
   const started = Date.now();
   let result = null;
   let comment;
+  let uploadProblem = null;
   try {
     const device = DEVICES[inputs.device];
     const measured = await measureVitals({
@@ -20809,7 +20869,17 @@ async function run(env = process.env) {
       durationMs: Date.now() - started,
       generatedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
-    result.meta.leboostUrl = await uploadResult(result, { key: inputs.leboostKey, baseUrl: inputs.leboostUrl, log });
+    const upload = await uploadResult(result, {
+      key: inputs.leboostKey,
+      idempotencyKey: uploadIdempotencyKey(env, result),
+      baseUrl: inputs.leboostUrl,
+      log
+    });
+    if (upload.status === "uploaded") result.meta.leboostUrl = upload.url;
+    if (upload.status === "failed") {
+      warning(upload.message);
+      uploadProblem = upload.message;
+    }
     comment = renderComment(result, { failOnRegression: inputs.failOnRegression, historyHint: !inputs.leboostKey });
   } catch (err) {
     warning(`leboost-pr-checks could not finish measuring: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -20818,7 +20888,8 @@ async function run(env = process.env) {
   const jsonPath = await writeFiles(outDir, result, comment);
   log(`
 ${comment}`);
-  await summary.addRaw(comment, true).write();
+  await summary.addRaw(uploadProblem ? `${comment}
+${uploadSummaryNote(uploadProblem)}` : comment, true).write();
   await postComment(inputs, ctx, api, comment);
   const { regressions, improvements } = result ? countVerdicts(result) : { regressions: 0, improvements: 0 };
   setOutput("regressions", regressions);

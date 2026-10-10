@@ -265,7 +265,46 @@ its samples and follow a page's LCP or TBT across PRs.
 2. Save it as a repository secret named `LEBOOST_KEY` (Settings, Secrets and variables, Actions).
 3. Pass it to the action: `leboost-key: ${{ secrets.LEBOOST_KEY }}`.
 
-The comment then links to the run in leboost. A failed upload is a warning in the log and never fails the job.
+The comment then links to the run in leboost. A failed upload never fails the job: leboost's reason shows as a warning in the
+log and under the results in the job summary.
+
+### Upload API
+
+The action stores a run with one request. You only need this to call it yourself or to debug an upload.
+
+```
+POST https://leboost.tech/api/lab-runs
+X-Leboost-Key: lb_live_<24 hex characters>
+Idempotency-Key: <optional, 1 to 255 printable ASCII characters, no spaces>
+Content-Type: application/json
+```
+
+The body is contract version 1: `{ "version": 1, "repo", "prNumber", "branch", "headSha", "baseSha", "baseUrl", "headUrl",
+"prodUrl", "ciRunUrl", "config", "pages" }`, with each page's per-metric samples and summary as in the action's
+`vitals.json`. Unknown fields are ignored. Up to 2 MB, 50 pages and 50 samples per side.
+
+| Status | Body                              | When                                                                                                            |
+| ------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| 201    | `{ runId, url }`                  | Stored. `url` is the run's page. A repeated `Idempotency-Key` returns the same body with `Idempotent-Replayed: true`. |
+| 400    | `{ error, issues, docs }`         | Not JSON, fails the contract (up to 20 `issues` as `{ path, message }`, `path` like `pages.0.metrics.LCP.base`), or a malformed `Idempotency-Key`. |
+| 401    | `{ error, docs }`                 | Missing or unknown site key. `error` says where to copy the key.                                                |
+| 413    | `{ error, docs }`                 | Body over 2 MB.                                                                                                 |
+| 429    | `{ error, docs, retryAfterSeconds }` | Over the rate limit, with a `Retry-After` header in seconds.                                                 |
+| 500    | `{ error }`                       | Storing failed and nothing was kept. Safe to retry with the same `Idempotency-Key`.                             |
+
+**Rate limit.** Each site stores up to 200 runs an hour and 1000 a day, counted over the last 60 minutes and 24 hours.
+`Retry-After` is when the oldest counted run leaves the window. A replayed `Idempotency-Key` is never limited.
+
+**Retries and duplicates.** The same `Idempotency-Key` on the same site always returns the run it first stored, for as long
+as leboost keeps the run (365 days); the body of a replay is not compared. Without the header every request stores a new run.
+The action sends `gh-<run id>-<run attempt>-<head SHA>-<hash>`, where the hash covers the job, the step and what was compared
+(device, URLs, paths), and retries a network error or a 5xx up to twice, 2 and 6 seconds apart, with the same key. So:
+
+- A retried upload within one job never stores the run twice.
+- Two jobs in one workflow (for example mobile and desktop) store two runs.
+- **Re-run jobs** in GitHub starts a new run attempt, which measures again, so it stores a new run with its own history
+  point. That is deliberate: it is a second measurement, not a retry of the first upload.
+- 4xx answers are not retried; the action prints leboost's message as is.
 
 ## Permissions and pull requests from forks
 

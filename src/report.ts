@@ -1,6 +1,7 @@
 // Turns raw samples into the result document and the PR comment.
 import { CONTEXT_ONLY, type DeviceName, FLOORS, type Floor, FROM_FIRST_BYTE, METRICS, type MetricName } from './config'
 import type { Load, PageSamples, SideName } from './run'
+import { chartImage, type History } from './chart'
 import { compareSamples, type Comparison, median, type Verdict } from './stats'
 
 const MIN_SAMPLES = 3
@@ -276,17 +277,51 @@ function tested(metric: MetricName, s: MetricSummary): FromFirstByte & { change:
 	return { baseMedian: t.baseMedian, headMedian: t.headMedian, deltaPct: t.deltaPct, change: formatChange(metric, t.baseMedian, t.headMedian, t.deltaPct) }
 }
 
-function flagged(pages: readonly PageResult[], verdict: Verdict): string[] {
+type Significant = Exclude<Verdict, 'no-change'>
+
+interface Flag {
+	page: PageResult
+	metric: MetricName
+	result: MetricResult
+	verdict: Significant
+}
+
+function flagged(pages: readonly PageResult[], verdict: Significant): Flag[] {
 	return pages.flatMap(page =>
 		sortedMetrics(page)
 			.filter(([, m]) => m.summary.verdict === verdict)
-			.map(([metric, m]) => {
-				const t = tested(metric, m.summary)
-				const after = m.summary.fromFirstByte ? ' after the first byte' : ''
-				const from = `${formatValue(metric, t.baseMedian)} to ${formatValue(metric, t.headMedian)}${after}`
-				return `- **${metric}** on ${code(page.path)}: ${from}, ${t.change}`
-			}),
+			.map(([metric, result]) => ({ page, metric, result, verdict })),
 	)
+}
+
+// The word always says the direction, so no reader has to decode a sign. CLS is a score, not a time.
+export function directionWord(metric: MetricName, verdict: Significant): string {
+	if (metric === 'CLS') return verdict === 'regressed' ? 'worse' : 'better'
+	return verdict === 'regressed' ? 'slower' : 'faster'
+}
+
+const capitalise = (s: string): string => `${s.charAt(0).toUpperCase()}${s.slice(1)}`
+// Plain spaces: a code block keeps them, and email clients copy them cleanly.
+const plainValue = (metric: MetricName, v: number): string => formatValue(metric, v).replaceAll(NBSP, ' ')
+
+// "- LCP  /docs  579 ms slower (26%)": regressions on red "-" lines, improvements on green "+" lines on github.com,
+// plain monospace in email. Sizes are unsigned; the word carries the direction.
+function diffBlock(flags: readonly Flag[]): string[] {
+	const rows = flags.map(f => {
+		const t = tested(f.metric, f.result.summary)
+		const pct = f.metric === 'CLS' || t.deltaPct === null ? '' : ` (${Math.abs(Math.round(t.deltaPct))}%)`
+		return {
+			sign: f.verdict === 'regressed' ? '-' : '+',
+			metric: f.metric,
+			path: f.page.path,
+			size: plainValue(f.metric, Math.abs(t.headMedian - t.baseMedian)),
+			rest: `${directionWord(f.metric, f.verdict)}${pct}`,
+		}
+	})
+	const width = (key: 'metric' | 'path' | 'size'): number => Math.max(...rows.map(r => r[key].length))
+	const [mw, pw, sw] = [width('metric'), width('path'), width('size')]
+	const lines = rows.map(r => `${r.sign} ${r.metric.padEnd(mw)}  ${r.path.padEnd(pw)}  ${r.size.padStart(sw)} ${r.rest}`)
+	return ['```diff', ...lines, '```']
 }
 
 export function countVerdicts(result: RunResult): { regressions: number; improvements: number } {
@@ -353,7 +388,7 @@ function serverGap(page: PageResult): number | null {
 const serverTime = (gap: number): string =>
 	`<br><sub>${gap > 0 ? 'plus' : 'minus'}${NBSP}${formatValue('TTFB', Math.abs(gap))} server${NBSP}time</sub>`
 
-// Five columns at most so it fits GitHub mobile; significant changes are bold (and listed in words above).
+// Five columns at most so it fits GitHub mobile; only significant rows get a word, in bold.
 function pageTable(page: PageResult, hasProd: boolean): string[] {
 	const header = ['Metric', 'main', `this${NBSP}PR`, 'Change']
 	if (hasProd) header.push('prod')
@@ -362,12 +397,8 @@ function pageTable(page: PageResult, hasProd: boolean): string[] {
 		const s = m.summary
 		const { change } = tested(metric, s)
 		const hint = gap !== null && s.fromFirstByte ? serverTime(gap) : ''
-		const cells = [
-			metric,
-			formatValue(metric, s.baseMedian),
-			formatValue(metric, s.headMedian),
-			`${s.verdict === 'no-change' ? change : `**${change}**`}${hint}`,
-		]
+		const word = s.verdict === 'no-change' ? '' : `**${capitalise(directionWord(metric, s.verdict))}** `
+		const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${hint}`]
 		if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian))
 		return `| ${cells.join(' | ')} |`
 	})
@@ -391,21 +422,43 @@ function serverLine(pages: readonly PageResult[]): string | null {
 export interface CommentOptions {
 	// The job fails on a regression (fail-on-regression: true).
 	failOnRegression?: boolean
+	// main's past medians per page and metric. Without them, or with too few runs, the comment has no chart.
+	history?: History
+	chartBaseUrl?: string
 }
 
-export function renderComment(result: RunResult, { failOnRegression = false }: CommentOptions = {}): string {
+const MAX_CHARTS = 3
+
+// One trend chart per page with a significant change, of its first flagged metric; for a quiet run, LCP on the first page.
+function charts(pages: readonly PageResult[], flags: readonly Flag[], history: History | undefined, baseUrl: string | undefined): string[] {
+	if (!history) return []
+	const picks: [PageResult, MetricName][] = []
+	for (const f of flags) if (!picks.some(([page]) => page === f.page)) picks.push([f.page, f.metric])
+	if (flags.length === 0 && pages.length > 0) {
+		const first = pages[0]
+		const metric = first.metrics.LCP ? 'LCP' : metricEntries(first)[0]?.[0]
+		if (metric) picks.push([first, metric])
+	}
+	return picks.slice(0, MAX_CHARTS).flatMap(([page, metric]) => {
+		const series = history[page.path]?.[metric]
+		const current = page.metrics[metric]?.summary.headMedian ?? null
+		const img = series ? chartImage({ metric, page: page.path, series, current, baseUrl }) : null
+		return img ? [img, ''] : []
+	})
+}
+
+export function renderComment(result: RunResult, { failOnRegression = false, history, chartBaseUrl }: CommentOptions = {}): string {
 	const { config, meta } = result
 	const hasProd = Boolean(result.prodUrl)
 	const pages = comparedPages(result).sort((a, b) => pageRank(a) - pageRank(b))
 	const regressed = flagged(pages, 'regressed')
 	const improved = flagged(pages, 'improved')
+	const flags = [...regressed, ...improved]
+	const chartLines = charts(pages, flags, history, chartBaseUrl)
 	const lines = [`### ${commentTitle(result)}`, '']
 
-	if (regressed.length > 0 && improved.length > 0) {
-		lines.push('**Regressed**', '', ...regressed, '', '**Improved**', '', ...improved, '')
-	} else if (regressed.length + improved.length > 0) {
-		lines.push(...regressed, ...improved, '')
-	}
+	// A quiet run stays short: no summary block, and its chart waits inside the table fold.
+	if (flags.length > 0) lines.push(...diffBlock(flags), '', ...chartLines)
 
 	const server = serverLine(pages)
 	if (server) lines.push(server, '')
@@ -428,7 +481,8 @@ export function renderComment(result: RunResult, { failOnRegression = false }: C
 	if (gaps.length > 0) lines.push('**Incomplete data**', '', ...gaps, '')
 
 	if (pages.length > 0) {
-		lines.push(`<details${regressed.length > 0 ? ' open' : ''}>`, '<summary>All metrics, significant changes in bold</summary>', '')
+		lines.push(`<details${regressed.length > 0 ? ' open' : ''}>`, '<summary>All metrics</summary>', '')
+		if (flags.length === 0) lines.push(...chartLines)
 		for (const page of pages) lines.push(...pageTable(page, hasProd), '')
 		const fromFirstByteMetrics = METRICS.filter(k => pages.some(p => p.metrics[k]?.summary.fromFirstByte))
 		if (fromFirstByteMetrics.length > 0) {

@@ -5,7 +5,7 @@ This PR's preview server responded 314 ms slower than main's on `/`. That is us
 Nothing on `/` and `/docs` moved past run-to-run noise. With 8 loads per side, smaller shifts can slip through, such as an LCP change under 200 ms.
 
 <details>
-<summary>All metrics, significant changes in bold</summary>
+<summary>All metrics</summary>
 
 **`/`**
 

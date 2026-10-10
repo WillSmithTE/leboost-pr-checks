@@ -1,15 +1,17 @@
 ### Lab web vitals: 1 regression vs main
 
-- **LCP** on `/`: 2.21 s to 2.79 s after the first byte, +579 ms (+26%)
+```diff
+- LCP  /  579 ms slower (26%)
+```
 
 <details open>
-<summary>All metrics, significant changes in bold</summary>
+<summary>All metrics</summary>
 
 **`/`**
 
 | Metric | main | this PR | Change | prod |
 |---|---|---|---|---|
-| LCP | 2.41 s | 2.99 s | **+579 ms (+26%)** | 2.41 s |
+| LCP | 2.41 s | 2.99 s | **Slower** +579 ms (+26%) | 2.41 s |
 | FCP | 1.80 s | 1.82 s | +16 ms (+1%) | 1.81 s |
 | CLS | 0.002 | 0.002 | 0.000 | 0.002 |
 | TBT | 281 ms | 284 ms | +3 ms (+1%) | 744 ms |

@@ -19882,6 +19882,57 @@ function parseInputs(get) {
   };
 }
 
+// src/chart.ts
+var CHART_BASE_URL = "https://usero.io/pr-checks/chart.png";
+var CHART_VERSION = 1;
+var CHART_WIDTH = 520;
+var MAX_POINTS = 30;
+var MIN_POINTS = 3;
+var MAX_PAGE_CHARS = 60;
+var MAX_URL_CHARS = 1500;
+var MAX_UNITS = 99999;
+var isNumber = (v) => typeof v === "number" && Number.isFinite(v);
+var toUnits = (metric, v) => Math.min(MAX_UNITS, Math.max(0, Math.round(metric === "CLS" ? v * 1e3 : v / 10)));
+var fromUnits = (metric, u) => metric === "CLS" ? u / 1e3 : u * 10;
+function pageLabel(page) {
+  return page.length > MAX_PAGE_CHARS ? `${page.slice(0, MAX_PAGE_CHARS - 3)}...` : page;
+}
+function chartUrl({ metric, page, series, current, baseUrl = CHART_BASE_URL }) {
+  let points = series.slice(-MAX_POINTS).map((v) => isNumber(v) ? String(toUnits(metric, v)) : "_");
+  if (points.filter((p) => p !== "_").length < MIN_POINTS) return null;
+  const build = () => {
+    const query = [`v=${CHART_VERSION}`, `m=${metric}`, `p=${encodeURIComponent(pageLabel(page))}`, `s=${points.join(".")}`];
+    if (isNumber(current)) query.push(`c=${toUnits(metric, current)}`);
+    return `${baseUrl}?${query.join("&")}`;
+  };
+  let url2 = build();
+  while (url2.length > MAX_URL_CHARS && points.length > MIN_POINTS) {
+    points = points.slice(1);
+    url2 = build();
+  }
+  return url2;
+}
+function plain(metric, v) {
+  if (metric === "CLS") return v.toFixed(3);
+  return v >= 1e3 ? `${(v / 1e3).toFixed(2)} s` : `${Math.round(v)} ms`;
+}
+function chartAlt({ metric, page, series, current }) {
+  const runs = series.slice(-MAX_POINTS);
+  const values2 = runs.filter(isNumber).map((v) => fromUnits(metric, toUnits(metric, v)));
+  const latest = values2[values2.length - 1];
+  const low = Math.min(...values2);
+  const high = Math.max(...values2);
+  const range = low === high ? `held at ${plain(metric, low)}` : `ranged ${plain(metric, low)} to ${plain(metric, high)}, latest ${plain(metric, latest)}`;
+  const pr = isNumber(current) ? ` This PR: ${plain(metric, fromUnits(metric, toUnits(metric, current)))}.` : "";
+  return `${metric} on ${pageLabel(page)}, main's last ${runs.length} runs ${range}.${pr}`;
+}
+var escapeAttr = (s) => s.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+function chartImage(input) {
+  const url2 = chartUrl(input);
+  if (!url2) return null;
+  return `<img src="${escapeAttr(url2)}" width="${CHART_WIDTH}" alt="${escapeAttr(chartAlt(input))}">`;
+}
+
 // src/stats.ts
 var EXACT_MAX_N = 80;
 var finite = (values2) => values2.filter((v) => typeof v === "number" && Number.isFinite(v));
@@ -20180,13 +20231,31 @@ function tested(metric, s) {
 }
 function flagged(pages, verdict) {
   return pages.flatMap(
-    (page) => sortedMetrics(page).filter(([, m]) => m.summary.verdict === verdict).map(([metric, m]) => {
-      const t = tested(metric, m.summary);
-      const after = m.summary.fromFirstByte ? " after the first byte" : "";
-      const from = `${formatValue(metric, t.baseMedian)} to ${formatValue(metric, t.headMedian)}${after}`;
-      return `- **${metric}** on ${code(page.path)}: ${from}, ${t.change}`;
-    })
+    (page) => sortedMetrics(page).filter(([, m]) => m.summary.verdict === verdict).map(([metric, result]) => ({ page, metric, result, verdict }))
   );
+}
+function directionWord(metric, verdict) {
+  if (metric === "CLS") return verdict === "regressed" ? "worse" : "better";
+  return verdict === "regressed" ? "slower" : "faster";
+}
+var capitalise = (s) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+var plainValue = (metric, v) => formatValue(metric, v).replaceAll(NBSP, " ");
+function diffBlock(flags) {
+  const rows = flags.map((f) => {
+    const t = tested(f.metric, f.result.summary);
+    const pct = f.metric === "CLS" || t.deltaPct === null ? "" : ` (${Math.abs(Math.round(t.deltaPct))}%)`;
+    return {
+      sign: f.verdict === "regressed" ? "-" : "+",
+      metric: f.metric,
+      path: f.page.path,
+      size: plainValue(f.metric, Math.abs(t.headMedian - t.baseMedian)),
+      rest: `${directionWord(f.metric, f.verdict)}${pct}`
+    };
+  });
+  const width = (key) => Math.max(...rows.map((r) => r[key].length));
+  const [mw, pw, sw] = [width("metric"), width("path"), width("size")];
+  const lines2 = rows.map((r) => `${r.sign} ${r.metric.padEnd(mw)}  ${r.path.padEnd(pw)}  ${r.size.padStart(sw)} ${r.rest}`);
+  return ["```diff", ...lines2, "```"];
 }
 function countVerdicts(result) {
   const pages = comparedPages(result);
@@ -20244,12 +20313,8 @@ function pageTable(page, hasProd) {
     const s = m.summary;
     const { change } = tested(metric, s);
     const hint = gap !== null && s.fromFirstByte ? serverTime(gap) : "";
-    const cells = [
-      metric,
-      formatValue(metric, s.baseMedian),
-      formatValue(metric, s.headMedian),
-      `${s.verdict === "no-change" ? change : `**${change}**`}${hint}`
-    ];
+    const word = s.verdict === "no-change" ? "" : `**${capitalise(directionWord(metric, s.verdict))}** `;
+    const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${hint}`];
     if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian));
     return `| ${cells.join(" | ")} |`;
   });
@@ -20266,18 +20331,33 @@ function serverLine(pages) {
   );
   return `This PR's preview server responded ${listJoin(parts)}. That is usually not the code, so it is left out of the result.`;
 }
-function renderComment(result, { failOnRegression = false } = {}) {
+var MAX_CHARTS = 3;
+function charts(pages, flags, history, baseUrl) {
+  if (!history) return [];
+  const picks = [];
+  for (const f of flags) if (!picks.some(([page]) => page === f.page)) picks.push([f.page, f.metric]);
+  if (flags.length === 0 && pages.length > 0) {
+    const first = pages[0];
+    const metric = first.metrics.LCP ? "LCP" : metricEntries(first)[0]?.[0];
+    if (metric) picks.push([first, metric]);
+  }
+  return picks.slice(0, MAX_CHARTS).flatMap(([page, metric]) => {
+    const series = history[page.path]?.[metric];
+    const current = page.metrics[metric]?.summary.headMedian ?? null;
+    const img = series ? chartImage({ metric, page: page.path, series, current, baseUrl }) : null;
+    return img ? [img, ""] : [];
+  });
+}
+function renderComment(result, { failOnRegression = false, history, chartBaseUrl } = {}) {
   const { config, meta } = result;
   const hasProd = Boolean(result.prodUrl);
   const pages = comparedPages(result).sort((a, b) => pageRank(a) - pageRank(b));
   const regressed = flagged(pages, "regressed");
   const improved = flagged(pages, "improved");
+  const flags = [...regressed, ...improved];
+  const chartLines = charts(pages, flags, history, chartBaseUrl);
   const lines2 = [`### ${commentTitle(result)}`, ""];
-  if (regressed.length > 0 && improved.length > 0) {
-    lines2.push("**Regressed**", "", ...regressed, "", "**Improved**", "", ...improved, "");
-  } else if (regressed.length + improved.length > 0) {
-    lines2.push(...regressed, ...improved, "");
-  }
+  if (flags.length > 0) lines2.push(...diffBlock(flags), "", ...chartLines);
   const server = serverLine(pages);
   if (server) lines2.push(server, "");
   if (pages.length > 0 && regressed.length === 0) {
@@ -20292,7 +20372,8 @@ function renderComment(result, { failOnRegression = false } = {}) {
   const gaps = gapLines(result);
   if (gaps.length > 0) lines2.push("**Incomplete data**", "", ...gaps, "");
   if (pages.length > 0) {
-    lines2.push(`<details${regressed.length > 0 ? " open" : ""}>`, "<summary>All metrics, significant changes in bold</summary>", "");
+    lines2.push(`<details${regressed.length > 0 ? " open" : ""}>`, "<summary>All metrics</summary>", "");
+    if (flags.length === 0) lines2.push(...chartLines);
     for (const page of pages) lines2.push(...pageTable(page, hasProd), "");
     const fromFirstByteMetrics = METRICS.filter((k) => pages.some((p) => p.metrics[k]?.summary.fromFirstByte));
     if (fromFirstByteMetrics.length > 0) {

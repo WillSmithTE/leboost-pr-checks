@@ -1,14 +1,11 @@
 ### Lab web vitals: 2 regressions, 2 improvements vs main, 1 page not compared
 
-**Regressed**
-
-- **LCP** on `/`: 2.21 s to 2.71 s after the first byte, +500 ms (+23%)
-- **CLS** on `/`: 0.002 to 0.081, +0.079
-
-**Improved**
-
-- **LCP** on `/docs`: 1.83 s to 1.53 s after the first byte, −302 ms (−16%)
-- **FCP** on `/docs`: 1.83 s to 1.53 s after the first byte, −302 ms (−16%)
+```diff
+- LCP  /      500 ms slower (23%)
+- CLS  /       0.079 worse
++ LCP  /docs  302 ms faster (16%)
++ FCP  /docs  302 ms faster (16%)
+```
 
 **Incomplete data**
 
@@ -17,14 +14,14 @@
 - `/checkout`: prod failed 6 of 6 loads (HTTP 404).
 
 <details open>
-<summary>All metrics, significant changes in bold</summary>
+<summary>All metrics</summary>
 
 **`/`**
 
 | Metric | main | this PR | Change | prod |
 |---|---|---|---|---|
-| LCP | 2.40 s | 2.91 s | **+500 ms (+23%)** | n/a |
-| CLS | 0.002 | 0.081 | **+0.079** | n/a |
+| LCP | 2.40 s | 2.91 s | **Slower** +500 ms (+23%) | n/a |
+| CLS | 0.002 | 0.081 | **Worse** +0.079 | n/a |
 | FCP | 2.39 s | 2.39 s | −3 ms (0%) | n/a |
 | TBT | 43 ms | 42 ms | −1 ms (−2%) | n/a |
 | TTFB | 200 ms | 199 ms | −1 ms (0%) | n/a |
@@ -33,8 +30,8 @@
 
 | Metric | main | this PR | Change | prod |
 |---|---|---|---|---|
-| LCP | 2.01 s | 1.71 s | **−302 ms (−16%)** | 1.40 s |
-| FCP | 2.01 s | 1.71 s | **−302 ms (−16%)** | 1.40 s |
+| LCP | 2.01 s | 1.71 s | **Faster** −302 ms (−16%) | 1.40 s |
+| FCP | 2.01 s | 1.71 s | **Faster** −302 ms (−16%) | 1.40 s |
 | CLS | 0.000 | 0.000 | 0.000 | 0.000 |
 | TBT | 22 ms | 24 ms | +2 ms (+9%) | 21 ms |
 | TTFB | 178 ms | 180 ms | +2 ms (+1%) | 61 ms |

@@ -1,15 +1,17 @@
 ### Lab web vitals: 1 regression vs main
 
-- **TBT** on `/docs`: 0 ms to 81 ms, +81 ms
+```diff
+- TBT  /docs  81 ms slower
+```
 
 <details open>
-<summary>All metrics, significant changes in bold</summary>
+<summary>All metrics</summary>
 
 **`/docs`**
 
 | Metric | main | this PR | Change |
 |---|---|---|---|
-| TBT | 0 ms | 81 ms | **+81 ms** |
+| TBT | 0 ms | 81 ms | **Slower** +81 ms |
 | LCP | 2.02 s | 2.04 s | +18 ms (+1%) |
 | FCP | 1.70 s | 1.72 s | +15 ms (+1%) |
 | CLS | 0.000 | 0.000 | 0.000 |

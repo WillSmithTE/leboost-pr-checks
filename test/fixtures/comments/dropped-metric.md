@@ -7,7 +7,7 @@ Nothing on `/` and `/docs` moved past run-to-run noise. With 8 loads per side, s
 - LCP on `/` was left out: only 2 of 8 loads on this PR reported it, 3 needed.
 
 <details>
-<summary>All metrics, significant changes in bold</summary>
+<summary>All metrics</summary>
 
 **`/`**
 

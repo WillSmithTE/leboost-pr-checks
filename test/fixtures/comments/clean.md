@@ -3,7 +3,7 @@
 Nothing on `/` and `/docs` moved past run-to-run noise. With 8 loads per side, smaller shifts can slip through, such as an LCP change under 110 ms.
 
 <details>
-<summary>All metrics, significant changes in bold</summary>
+<summary>All metrics</summary>
 
 **`/`**
 

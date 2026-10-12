@@ -1,8 +1,9 @@
 # Usero PR checks
 
 A GitHub Action that loads your pull request's preview and your main branch's preview back to back, in the same job, and
-measures lab web vitals on both (LCP, FCP, CLS, TBT, TTFB, optionally INP). A significance test decides what changed, and one
-PR comment reports only the changes larger than run-to-run noise. It never fails your build unless you ask it to.
+measures lab web vitals (LCP, FCP, CLS, TBT, optionally INP) and server time on both. A significance test decides what
+changed, and one PR comment reports only the changes larger than run-to-run noise. It never fails your build unless you ask
+it to.
 
 <img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main, with a diff line reading LCP on / 529 ms slower (65%), and the table of every metric below." width="548">
 
@@ -45,6 +46,9 @@ it at a site that reports to your production analytics.
   "slower" or "faster" on every line, so it reads the same in a notification email where colour is gone.
 - When nothing moved there is no block. One line says what a run of this size can still miss, for example "an LCP change
   under 110 ms".
+- Server time is judged like the rest, in its own Server row: a slow query or an extra database round trip in a PR is a
+  regression. If your server sends a `Server-Timing` header, its database time and query count show under the row, see
+  [Server time](#server-time).
 - Failed loads, and pages or metrics without enough good loads, are listed too.
 - A table with every metric per page, folded away unless something regressed. Only the significant rows say Slower or
   Faster.
@@ -63,9 +67,10 @@ image and a PR that changes nothing, with the comment this action posted on each
 | `prod-url`           |                       | Your production URL. Its medians are shown in the table for reference and never change the result. Its loads are real production visits. |
 | `paths`              | `/`                   | Pages to measure. One per line, or separated by spaces or commas.                                                                        |
 | `rounds`             | `8`                   | Rounds per page, 3 to 50. Each round loads main and the PR once, in alternating order.                                                   |
+| `server-samples`     | `30`                  | Server time requests per side and page, 10 to 200, or `0` to turn server time off. See [Server time](#server-time).                      |
 | `device`             | `mobile`              | `mobile` (Lighthouse's Slow 4G and 4x CPU profile) or `desktop`.                                                                         |
 | `interact`           |                       | INP measurement: one `PATH::SELECTOR` per line, clicked after load. Without it INP is not reported.                                      |
-| `headers`            |                       | Extra request headers, one `Name: value` per line, sent only to the head, base and prod sites.                                           |
+| `headers`            |                       | Extra request headers, one `Name: value` per line, sent only to the head, base and prod sites, and with the server time requests.       |
 | `github-token`       | `${{ github.token }}` | Finds the PR, posts the comment and reads past runs for the trend chart.                                                                  |
 | `comment`            | `true`                | Post or update the PR comment. The job summary is written either way.                                                                     |
 | `pr-number`          | from the event        | The PR to comment on. Found from the event or the commit; set it for `workflow_dispatch` runs.                                           |
@@ -93,6 +98,44 @@ This run's main is the newest point. Runs on another device or base URL are neve
 - The image is drawn by usero.io from its URL, which holds the metric, the page path and the rounded medians, nothing else:
   no repository name, no site address, no token. GitHub fetches it once through its image proxy and caches it.
 - Reading history runs while the pages load, so it adds no time to the job.
+
+## Server time
+
+Before any page loads, the action sends plain GET requests (no browser, no throttling) to each path on main and the PR: 3
+warm-up requests per side that are thrown away, then `server-samples` (30) per side, alternating main and PR. The time is
+from sending the request to the first byte of the response, with connection setup left out, so it is the server's work
+plus one network round trip from the runner. The requests use the mobile browser's user agent and your `headers`.
+
+- **The Server row is judged** like LCP or TBT (the test is under [Method](#method)), so a PR that adds a slow query, an
+  extra database round trip or slow rendering on the server gets a regression on its own line. LCP and FCP are judged from
+  the first byte, so the same slowdown is never counted twice.
+- **Cold requests.** A request slower than 3x its side's median and 300 ms over it is a cold outlier (a cold isolate or
+  lambda). Up to 10% of a side's requests can be left out this way; the row says how many. More than that is how the server
+  behaves, so they stay in.
+- **Why not the page loads' TTFB.** Each page load opens a fresh connection in a fresh browser context, and on serverless
+  previews that first byte flips between about 0.1 s and 1.3 to 1.9 s for minutes at a time (most likely new connections
+  landing on cold isolates). In A/A runs a verdict on it fired 63 to 73% of the time. Warm requests on kept-alive connections do not
+  see that, and 30 of them per side cost a few seconds. The page loads' TTFB stays in `vitals.json` but not in the comment.
+
+### Server-Timing (optional)
+
+If your server sends a [`Server-Timing`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Server-Timing) header
+on HTML responses, the action reads three things from it:
+
+```
+Server-Timing: total;dur=182.4, db;dur=41.7;count=6
+```
+
+| Metric             | Meaning                                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `total;dur=<ms>`   | Time spent in your handler, up to the response headers. When every request on both sides has it, the Server row tests `total` instead of the first byte, which leaves the network out. |
+| `db;dur=<ms>`      | Database time. Shown under the Server row as main's and the PR's medians.                                   |
+| `db;count=<n>`     | Number of queries, shown next to it. Several `db` entries are summed, and without `count` each entry counts as one query. |
+
+Other metrics in the header are ignored. Only send `total` if it covers CPU time too: on Cloudflare Workers the clock stops
+between I/O events, so a `total` there leaves out rendering and a CPU-heavy regression would read as no change. Send only
+`db` there, and the row keeps testing the first byte. The header is visible to anyone who loads the page, so you can limit
+it to preview deployments, which is where this action measures.
 
 ## Recipes
 
@@ -245,8 +288,8 @@ jobs:
 
 The [demo repository](https://github.com/usero-feedback/pr-checks-demo) runs this setup; its
 [workflow](https://github.com/usero-feedback/pr-checks-demo/blob/main/.github/workflows/pr.yml) is a complete example.
-Local servers answer in a millisecond, so this setup cannot see TTFB or server-side changes. Everything after the first byte
-is measured.
+A static file server answers in about a millisecond, so the Server row only moves when the server you start does real work
+per request. The demo's small server does, and its PR #4 makes it 300 ms slower.
 
 ## Analytics
 
@@ -257,6 +300,8 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
   test key for your RUM tool), the same way you keep preview data out of your production database. The test loads land
   there instead of in your real numbers.
 - A run sends 2 warm-up loads plus `rounds` x 2 loads per path to the previews: 18 page views for one path at the defaults.
+  Server time adds 33 plain GETs per side and path (3 warm-up, `server-samples` measured) that run no page scripts, so only
+  server-side analytics count them.
 - `prod-url` loads are real visits to production and send real hits to your production analytics (3 per path per run). Leave
   `prod-url` out if that matters.
 - The loads use an ordinary Chrome user agent from GitHub's runner IPs, so they are hard to filter out afterwards. A test
@@ -276,7 +321,8 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
 ## Run time
 
 A load takes 2 to 10 seconds at the mobile profile, depending on the page. A run is 2 warm-up loads plus, per path,
-`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. With the default 8 rounds on one path, the action took
+`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. Server time comes first and takes seconds: 66 requests
+per path at your server's speed. With the default 8 rounds on one path, the action took
 52 s on the demo's one-page static site and 93 s on a small marketing site's home page. On Usero (pages of about 1 MB) 8
 rounds on two paths with prod took 6.5 to 7 minutes.
 
@@ -316,16 +362,12 @@ up to 80 samples, ties included) and a Hodges-Lehmann shift with its confidence 
 | TBT      | 50 ms or 20%                          | Long-task time is the noisiest lab metric; only big shifts are real. |
 | INP      | 25 ms or 20%                          | One scripted click per load; small moves are frame timing noise.     |
 | CLS      | 0.01                                  | Lab CLS is nearly deterministic, so any visible shift counts.        |
-| TTFB     | reference only                        | See below.                                                           |
+| Server   | 50 ms or 10% of main                  | Warm requests are steady to a few ms, and 50 ms adds to every page.  |
 
 **Paint is measured from the first byte.** LCP and FCP are tested as each load's value minus its TTFB. Preview servers
 switch between fast and slow first bytes for minutes at a time, on their own, and that used to swamp real paint changes. The
-table still shows the full medians, and when the PR's server was slower or faster than main's the comment says so in one
-line and splits the change into paint time and server time.
-
-**TTFB is shown but never judged.** Two preview deployments differ in first-byte time for reasons unrelated to the code
-(placement, cold caches, separate databases): in A/A runs a TTFB verdict fired 63 to 73% of the time. A server-side slowdown
-in a PR therefore has to be read from the TTFB row.
+table still shows the full medians. Server time has its own row, measured on warm connections (see
+[Server time](#server-time)), so a server slowdown counts once, there.
 
 **A failed load** (an HTTP error, a timeout) is recorded with its reason and left out of the stats. A metric needs at least 3
 good loads per side to be compared.
@@ -343,9 +385,26 @@ rounds per page scored in 1000 random subsets of 8 rounds, with known regression
 | +150 ms TBT                            | 97%, 100%            |
 | +500 ms server delay, as an LCP change | 0%, 0% (by design)   |
 
-The last row is expected. Paint is measured from the first byte, so a slower server shows up in the TTFB row and does not
-produce a verdict. Smaller pages have smaller floors, so smaller changes can count; the comment states the floor of each
-run. On the demo's static page a heavier hero image (+107 KB) came out as +531 ms LCP and was flagged.
+The last row is expected: paint is measured from the first byte, so a slower server counts in the Server row instead.
+Smaller pages have smaller floors, so smaller changes can count; the comment states the floor of each run. On the demo's
+static page a heavier hero image (+107 KB) came out as +531 ms LCP and was flagged.
+
+**Server time** was measured the same way on 2026-10-12 with `npm run power` (`scripts/power-server.ts`): on a GitHub
+runner, 15 runs per page, each exactly the action's sampling (3 warm-up, then 30 interleaved requests per side), against
+Usero's main preview as main and, as the PR, either the same preview or a second deployment of the same code with its own
+Worker and database. Every side goes through a local proxy, and the injected rows hold the PR's responses for 100 or 300 ms.
+Each cell is runs with the verdict, then the rate over 1000 runs resampled from all rounds:
+
+| `/` then `/docs`               | main against main         | main against a second deployment |
+| ------------------------------ | ------------------------- | -------------------------------- |
+| Nothing (A/A): a false verdict | 0 of 15, 0 of 15 (0%, 0%) | 0 of 15, 0 of 15 (0.2%, 0%)      |
+| +100 ms server time caught     | 15 of 15, 15 of 15 (99.9%, 100%) | 15 of 15, 15 of 15 (100%)  |
+| +300 ms server time caught     | 15 of 15, 15 of 15 (100%) | 15 of 15, 15 of 15 (100%)        |
+
+Warm medians per run stayed within 68 to 135 ms on `/` and 48 to 74 ms on `/docs`, and the two deployments differed by 16
+ms and 6 ms, under the 50 ms floor. The preview first-byte swings that made page-load TTFB useless (0.1 s against 1.3 to
+1.9 s) did not show up on warm connections. On the demo, a server 300 ms slower per page was flagged (PR #4). Neither Usero page queries its database for an
+anonymous visitor, so these runs cover rendering and the network, not query time.
 
 ## Limits
 

@@ -5,7 +5,7 @@ import { sendHeaders } from './headers'
 import { measureLoad } from './measure'
 import type { PageInput } from './report'
 import { type Log, type PageSpec, type Side, samplePage, warmUp } from './run'
-import { type ServerSamples, sampleServer, timeRequest } from './server'
+import { type ServerSamples, sampleServer, serverRequestHeaders, timeRequest } from './server'
 
 export interface VitalsRun {
 	executablePath: string
@@ -21,14 +21,10 @@ export interface VitalsRun {
 	log: Log
 }
 
-const DOCUMENT_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-
 async function measureServer(run: VitalsRun): Promise<Map<string, ServerSamples>> {
 	const out = new Map<string, ServerSamples>()
 	if (run.serverSamples === 0) return out
-	// The browser's user agent, so the server answers as it does for the page loads.
-	const headers: Record<string, string> = { 'user-agent': DEVICES[run.device].userAgent, accept: DOCUMENT_ACCEPT }
-	for (const [name, value] of Object.entries(run.headers)) headers[name.toLowerCase()] = value
+	const headers = serverRequestHeaders(run.device, run.headers)
 	for (const page of run.pages) {
 		run.log(`${page.path}: server time, ${SERVER_WARM_UP} warm-up and ${run.serverSamples} requests per side`)
 		const samples = await sampleServer({

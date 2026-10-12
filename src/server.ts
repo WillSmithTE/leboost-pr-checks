@@ -1,6 +1,15 @@
 // Server time: plain GETs (no browser, no throttling) to each path on main and the PR, warm and interleaved.
-import { SERVER_TIMEOUT_MS } from './config'
+import { DEVICES, type DeviceName, SERVER_TIMEOUT_MS } from './config'
 import { firstLine, joinUrl, type Log, roundOrder } from './run'
+
+const DOCUMENT_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+
+// The browser's user agent and accept header, so the server answers as it does for the page loads, then the extra headers.
+export function serverRequestHeaders(device: DeviceName, extra: Record<string, string>): Record<string, string> {
+	const headers: Record<string, string> = { 'user-agent': DEVICES[device].userAgent, accept: DOCUMENT_ACCEPT }
+	for (const [name, value] of Object.entries(extra)) headers[name.toLowerCase()] = value
+	return headers
+}
 
 export interface ServerTiming {
 	// Server-Timing `total;dur=`: the handler's own time, without network or connection setup.

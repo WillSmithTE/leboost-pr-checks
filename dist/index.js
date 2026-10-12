@@ -106094,6 +106094,12 @@ async function measureLoad(browser, url3, { device, interaction, settleMs, idleT
 }
 
 // src/server.ts
+var DOCUMENT_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+function serverRequestHeaders(device, extra) {
+  const headers = { "user-agent": DEVICES[device].userAgent, accept: DOCUMENT_ACCEPT };
+  for (const [name, value] of Object.entries(extra)) headers[name.toLowerCase()] = value;
+  return headers;
+}
 function splitOutside(value, separator) {
   const parts = [];
   let current = "";
@@ -106212,12 +106218,10 @@ async function sampleServer({
 }
 
 // src/vitals.ts
-var DOCUMENT_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 async function measureServer(run2) {
   const out = /* @__PURE__ */ new Map();
   if (run2.serverSamples === 0) return out;
-  const headers = { "user-agent": DEVICES[run2.device].userAgent, accept: DOCUMENT_ACCEPT };
-  for (const [name, value] of Object.entries(run2.headers)) headers[name.toLowerCase()] = value;
+  const headers = serverRequestHeaders(run2.device, run2.headers);
   for (const page of run2.pages) {
     run2.log(`${page.path}: server time, ${SERVER_WARM_UP} warm-up and ${run2.serverSamples} requests per side`);
     const samples = await sampleServer({

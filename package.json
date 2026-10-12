@@ -12,7 +12,8 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "power": "esbuild scripts/power-server.ts --bundle --platform=node --format=esm --packages=external --log-level=warning --outfile=node_modules/.cache/power-server.mjs && node node_modules/.cache/power-server.mjs"
   },
   "dependencies": {
     "@actions/artifact": "6.2.1",

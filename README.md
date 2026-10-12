@@ -375,7 +375,7 @@ up to 80 samples, ties included) and a Hodges-Lehmann shift with its confidence 
 | TBT      | 50 ms or 20%                          | Long-task time is the noisiest lab metric; only big shifts are real. |
 | INP      | 25 ms or 20%                          | One scripted click per load; small moves are frame timing noise.     |
 | CLS      | 0.01                                  | Lab CLS is nearly deterministic, so any visible shift counts.        |
-| Server   | 50 ms or 10% of main                  | Warm requests are steady to a few ms, and 50 ms adds to every page.  |
+| Server   | 75 ms or 10% of main                  | Two deployments of the same code differed by up to 58 ms warm.       |
 
 **Paint is measured from the first byte.** LCP and FCP are tested as each load's value minus its TTFB, or minus the moment
 the page's first script could run when that is later: a server that answers in a millisecond beats the browser's own
@@ -405,21 +405,24 @@ Smaller pages have smaller floors, so smaller changes can count; the comment sta
 static page a heavier hero image (+107 KB) came out as +531 ms LCP and was flagged.
 
 **Server time** was measured the same way on 2026-10-12 with `npm run power` (`scripts/power-server.ts`): on a GitHub
-runner, 15 runs per page, each exactly the action's sampling (3 warm-up, then 30 interleaved requests per side), against
+runner, 15 runs per page, each the action's warm sampling (3 warm-up, then 30 interleaved requests per side), against
 Usero's main preview as main and, as the PR, either the same preview or a second deployment of the same code with its own
 Worker and database. Every side goes through a local proxy, and the injected rows hold the PR's responses for 100 or 300 ms.
-Each cell is runs with the verdict, then the rate over 1000 runs resampled from all rounds:
+Each cell is runs with the verdict, then the rate over 1000 runs resampled from all rounds, at the 75 ms floor:
 
-| `/` then `/docs`               | main against main         | main against a second deployment |
-| ------------------------------ | ------------------------- | -------------------------------- |
-| Nothing (A/A): a false verdict | 0 of 15, 0 of 15 (0%, 0%) | 0 of 15, 0 of 15 (0.2%, 0%)      |
-| +100 ms server time caught     | 15 of 15, 15 of 15 (99.9%, 100%) | 15 of 15, 15 of 15 (100%)  |
-| +300 ms server time caught     | 15 of 15, 15 of 15 (100%) | 15 of 15, 15 of 15 (100%)        |
+| `/` then `/docs`               | main against main                | main against a second deployment |
+| ------------------------------ | -------------------------------- | -------------------------------- |
+| Nothing (A/A): a false verdict | 0 of 15, 0 of 15 (0%, 0%)        | 0 of 15, 0 of 15 (0%, 0%)        |
+| +100 ms server time caught     | 15 of 15, 15 of 15 (99.9%, 100%) | 14 of 15, 15 of 15 (100%, 100%)  |
+| +300 ms server time caught     | 15 of 15, 15 of 15 (100%)        | 15 of 15, 15 of 15 (100%)        |
 
-Warm medians per run stayed within 68 to 135 ms on `/` and 48 to 74 ms on `/docs`, and the two deployments differed by 16
-ms and 6 ms, under the 50 ms floor. The preview first-byte swings that made page-load TTFB useless (0.1 s against 1.3 to
-1.9 s) did not show up on warm connections. On the demo, a server 300 ms slower per page was flagged (PR #4). Neither Usero page queries its database for an
-anonymous visitor, so these runs cover rendering and the network, not query time.
+Warm medians per run stayed within 68 to 135 ms on `/` and 48 to 74 ms on `/docs`. The two deployments differed by 16 ms
+and 6 ms in these runs, but by 58 ms and then 34 ms on `/` in two later runs of Usero PR #297 (same code, with a 50 ms floor
+the first of those read as 58 ms faster), which is why the floor is 75 ms. The preview first-byte swings that made page-load
+TTFB useless (0.1 s against 1.3 to 1.9 s) did not show up on warm connections; on new connections they did, as cold starts
+(1.4 to 2.9 s), which is what the Cold start row reports. On the demo, a server 300 ms slower per page was flagged (PR #4).
+Neither Usero page queries its database for an anonymous visitor, so these runs cover rendering and the network, not query
+time.
 
 ## Limits
 

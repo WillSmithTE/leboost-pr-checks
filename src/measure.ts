@@ -20,8 +20,8 @@ declare global {
 }
 
 // Runs in every frame before any page script; only the top frame collects.
-function collector() {
-	const vitals: Metrics = {}
+function collector(documentStart: number) {
+	const vitals: Metrics = { documentStart }
 	const longtasks: [number, number][] = []
 	window.__prChecksVitals = { vitals, longtasks }
 	const opts = { reportAllChanges: true }
@@ -36,7 +36,8 @@ function collector() {
 	}).observe({ type: 'longtask', buffered: true })
 }
 
-const INIT_SCRIPT = `if (window === window.top) {\n${WEB_VITALS_UMD}\n;(${collector.toString()})()\n}`
+// The start time is read before web-vitals is evaluated, so its own parse time is not in it.
+const INIT_SCRIPT = `if (window === window.top) {\nconst __prChecksStart = performance.now();\n${WEB_VITALS_UMD}\n;(${collector.toString()})(__prChecksStart)\n}`
 
 // Fires the page-hidden lifecycle so web-vitals finalises LCP, CLS and INP like a real tab switch.
 function hidePage() {

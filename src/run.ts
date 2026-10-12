@@ -3,7 +3,8 @@
 import type { MetricName } from './config'
 
 export type SideName = 'base' | 'head' | 'prod'
-export type Metrics = Partial<Record<MetricName, number | null>>
+// documentStart: when the page's first script ran, after the first byte and once the browser was ready to render.
+export type Metrics = Partial<Record<MetricName | 'documentStart', number | null>>
 // A failed load is null, kept in its round so main and PR pair up by index.
 export type Load = Metrics | null
 

@@ -113,14 +113,16 @@ const values = (loads: readonly Load[], metric: MetricName): Values => loads.map
 const column = (loads: readonly Load[], metric: MetricName): number[] =>
 	values(loads, metric).filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
 const finiteCount = (xs: Values): number => xs.filter(v => typeof v === 'number' && Number.isFinite(v)).length
-// Paint time after the first byte; undefined when either is missing.
+const finiteOrNull = (v: number | null | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+
+// Paint time after the first byte, or after documentStart when later: a browser still starting up when a fast server's
+// first byte arrives would otherwise make any slower server look like faster paint. Undefined when a value is missing.
 const fromFirstByte = (loads: readonly Load[], metric: MetricName): Values =>
 	loads.map(m => {
-		const paint = m?.[metric]
-		const ttfb = m?.TTFB
-		return typeof paint === 'number' && Number.isFinite(paint) && typeof ttfb === 'number' && Number.isFinite(ttfb)
-			? paint - ttfb
-			: undefined
+		const paint = finiteOrNull(m?.[metric])
+		const ttfb = finiteOrNull(m?.TTFB)
+		if (paint === null || ttfb === null) return undefined
+		return paint - Math.max(ttfb, finiteOrNull(m?.documentStart) ?? ttfb)
 	})
 // A percent of a zero base means nothing (common for CLS and TBT).
 const changePct = (base: number, head: number): number | null => (base === 0 ? null : ((head - base) / base) * 100)
@@ -237,10 +239,13 @@ export function summariseServer(samples: ServerSamples, alpha: number, floor: Fl
 	}
 	const b = split(base)
 	const h = split(head)
+	const summary = summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false)
+	// A percent of a base under the floor (a static server answering in 1 ms) means nothing.
+	if (summary.baseMedian < floor.absFloor) summary.deltaPct = null
 	return {
 		base: b.kept,
 		head: h.kept,
-		summary: summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false),
+		summary,
 		server: {
 			source,
 			db: medianPair(base, head, 'db'),

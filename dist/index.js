@@ -62342,10 +62342,12 @@ var MIN_SAMPLES = 3;
 var values = (loads, metric) => loads.map((m) => m?.[metric]);
 var column = (loads, metric) => values(loads, metric).filter((v) => typeof v === "number" && Number.isFinite(v));
 var finiteCount = (xs) => xs.filter((v) => typeof v === "number" && Number.isFinite(v)).length;
+var finiteOrNull = (v) => typeof v === "number" && Number.isFinite(v) ? v : null;
 var fromFirstByte = (loads, metric) => loads.map((m) => {
-  const paint = m?.[metric];
-  const ttfb = m?.TTFB;
-  return typeof paint === "number" && Number.isFinite(paint) && typeof ttfb === "number" && Number.isFinite(ttfb) ? paint - ttfb : void 0;
+  const paint = finiteOrNull(m?.[metric]);
+  const ttfb = finiteOrNull(m?.TTFB);
+  if (paint === null || ttfb === null) return void 0;
+  return paint - Math.max(ttfb, finiteOrNull(m?.documentStart) ?? ttfb);
 });
 var changePct = (base, head) => base === 0 ? null : (head - base) / base * 100;
 var tidy = (v) => Number(v.toPrecision(6));
@@ -62432,10 +62434,12 @@ function summariseServer(samples, alpha, floor = FLOORS.Server) {
   };
   const b = split(base);
   const h = split(head);
+  const summary2 = summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false);
+  if (summary2.baseMedian < floor.absFloor) summary2.deltaPct = null;
   return {
     base: b.kept,
     head: h.kept,
-    summary: summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false),
+    summary: summary2,
     server: {
       source,
       db: medianPair(base, head, "db"),
@@ -106014,8 +106018,8 @@ async function sendHeaders(browser, headers, origins) {
 // src/measure.ts
 var import_web_vitals_umd = __toESM(require_web_vitals_umd(), 1);
 var LONG_TASK_MS = 50;
-function collector() {
-  const vitals = {};
+function collector(documentStart) {
+  const vitals = { documentStart };
   const longtasks = [];
   window.__prChecksVitals = { vitals, longtasks };
   const opts = { reportAllChanges: true };
@@ -106030,8 +106034,9 @@ function collector() {
   }).observe({ type: "longtask", buffered: true });
 }
 var INIT_SCRIPT = `if (window === window.top) {
+const __prChecksStart = performance.now();
 ${import_web_vitals_umd.default}
-;(${collector.toString()})()
+;(${collector.toString()})(__prChecksStart)
 }`;
 function hidePage() {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });

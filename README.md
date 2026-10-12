@@ -364,7 +364,9 @@ up to 80 samples, ties included) and a Hodges-Lehmann shift with its confidence 
 | CLS      | 0.01                                  | Lab CLS is nearly deterministic, so any visible shift counts.        |
 | Server   | 50 ms or 10% of main                  | Warm requests are steady to a few ms, and 50 ms adds to every page.  |
 
-**Paint is measured from the first byte.** LCP and FCP are tested as each load's value minus its TTFB. Preview servers
+**Paint is measured from the first byte.** LCP and FCP are tested as each load's value minus its TTFB, or minus the moment
+the page's first script could run when that is later: a server that answers in a millisecond beats the browser's own
+start-up by about 200 ms, and without this a 300 ms slower server read as 160 ms faster paint on the demo. Preview servers
 switch between fast and slow first bytes for minutes at a time, on their own, and that used to swamp real paint changes. The
 table still shows the full medians. Server time has its own row, measured on warm connections (see
 [Server time](#server-time)), so a server slowdown counts once, there.

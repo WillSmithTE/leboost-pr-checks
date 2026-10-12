@@ -392,6 +392,26 @@ describe('renderComment', () => {
 		expect(md).not.toMatch(/\| TTFB \||server responded/)
 	})
 
+	it('times paint from documentStart when the browser was still starting up at the first byte', () => {
+		// A 1 ms server: the browser is ready at 170 ms. 300 ms slower: ready right after the first byte. Same paint after it.
+		const fast = (i: number): Metrics => ({ TTFB: 1, documentStart: 170 + i, FCP: 800 + i, LCP: 800 + i })
+		const slow = (i: number): Metrics => ({ TTFB: 301, documentStart: 305 + i, FCP: 935 + i, LCP: 935 + i })
+		const rounds = [0, 3, 1, 4, 2, 5, 7, 6]
+		const page = build({ prodUrl: null, pages: [{ path: '/', loads: { base: rounds.map(fast), head: rounds.map(slow) }, failures: {} }] }).pages[0]
+		expect(page.metrics.LCP?.summary.fromFirstByte).toMatchObject({ baseMedian: 630, headMedian: 630 })
+		expect(page.metrics.FCP?.summary.verdict).toBe('no-change')
+	})
+
+	it('shows no percent for server time on a base under the floor', () => {
+		const result = build({
+			prodUrl: null,
+			config: { ...META.config, serverRequests: SERVER_REQUESTS },
+			pages: [{ path: '/', loads: { base: [], head: [] }, failures: {}, server: serverSamples({ ms: 16 }, { ms: 316 }) }],
+		})
+		expect(result.pages[0].metrics.Server?.summary.deltaPct).toBeNull()
+		expect(render(result)).toContain('- Server  /  300 ms slower\n')
+	})
+
 	it('judges server time from warm requests, not from the cold page loads first byte', () => {
 		const md = render(SCENARIOS['slow-preview-server'])
 		// The page loads saw a 314 ms slower first byte on `/`; warm requests found the servers equal.

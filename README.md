@@ -5,7 +5,7 @@ measures lab web vitals (LCP, FCP, CLS, TBT, optionally INP) and server time on 
 changed, and one PR comment reports only the changes larger than run-to-run noise. It never fails your build unless you ask
 it to.
 
-<img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main, with a diff line reading LCP on / 529 ms slower (65%), and the table of every metric below." width="548">
+<img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main, with a diff line reading LCP on / 533 ms slower (85%), a trend chart of main's LCP with this PR's 1.37 s set apart, and a short table of LCP and FCP." width="390">
 
 This is a pre-release. Inputs may change before v1, so pin `@v0` and check the release notes when you update.
 

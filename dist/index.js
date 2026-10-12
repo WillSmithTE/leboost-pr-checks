@@ -62450,12 +62450,21 @@ function medianPair(base, head, key) {
   if (pair.baseMedian === null && pair.headMedian === null) return null;
   return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) };
 }
-function summariseServer(samples, alpha, floor = FLOORS.Server) {
-  const good = (side) => side.filter((s) => s !== null);
-  const first = { base: good(samples.first?.base ?? []), head: good(samples.first?.head ?? []) };
-  const measured = { base: good(samples.base), head: good(samples.head) };
+var goodLoads = (side) => side.filter((s) => s !== null);
+var sendsTiming = (s) => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null;
+var sendsServerTiming = (samples) => [samples.base, samples.head, samples.first?.base ?? [], samples.first?.head ?? []].some((side) => goodLoads(side).some(sendsTiming));
+function staticSides(samples) {
+  const isStatic = (measured, first = []) => goodLoads(measured).length >= MIN_SAMPLES && ![...goodLoads(first), ...goodLoads(measured)].some(sendsTiming);
+  return { base: isStatic(samples.base, samples.first?.base), head: isStatic(samples.head, samples.first?.head) };
+}
+function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base: false, head: false }) {
+  if (statics.base && statics.head) return null;
+  const anyStatic = statics.base || statics.head;
+  const first = { base: goodLoads(samples.first?.base ?? []), head: goodLoads(samples.first?.head ?? []) };
+  const measured = { base: goodLoads(samples.base), head: goodLoads(samples.head) };
   const marked = (side) => [...first[side], ...measured[side]].some((s) => s.isolate !== null);
   const split = (side) => {
+    if (statics[side]) return { warm: measured[side], cold: [] };
     if (marked(side)) {
       return {
         warm: measured[side].filter((s) => s.isolate !== "cold"),
@@ -62476,18 +62485,22 @@ function summariseServer(samples, alpha, floor = FLOORS.Server) {
   const b = split("base");
   const h = split("head");
   if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null;
-  const source = [...b.warm, ...h.warm].every((s) => s.total !== null) ? "server-timing" : "ttfb";
+  const source = !anyStatic && [...b.warm, ...h.warm].every((s) => s.total !== null) ? "server-timing" : "ttfb";
   const value = (s) => source === "server-timing" && s.total !== null ? s.total : s.ttfb;
   const bKept = b.warm.map(value);
   const hKept = h.warm.map(value);
   const summary2 = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false);
   if (summary2.baseMedian < floor.absFloor) summary2.deltaPct = null;
+  if (anyStatic) {
+    summary2.verdict = statics.head && summary2.verdict !== "regressed" && summary2.headMedian <= summary2.baseMedian ? "improved" : "no-change";
+  }
   return {
     base: bKept,
     head: hKept,
     summary: summary2,
     server: {
       source,
+      static: statics,
       db: medianPair(b.warm, h.warm, "db"),
       queries: medianPair(b.warm, h.warm, "queries"),
       coldStarts: {
@@ -62509,6 +62522,7 @@ function buildResult({
   bundle = null,
   ...meta
 }) {
+  const timed = pages.some((p) => p.server && sendsServerTiming(p.server));
   return {
     version: 1,
     bundle: bundle && (bundle.base !== null || bundle.head !== null) ? bundle : null,
@@ -62524,9 +62538,10 @@ function buildResult({
     config: meta.config,
     pages: pages.map((p) => {
       const page = summarisePage(p.path, p.loads, alpha);
-      const server = p.server ? summariseServer(p.server, alpha) : null;
+      const statics = p.server && timed ? staticSides(p.server) : { base: false, head: false };
+      const server = p.server ? summariseServer(p.server, alpha, void 0, statics) : null;
       if (server) page.metrics.Server = server;
-      return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null };
+      return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null, serverStatic: statics.base && statics.head };
     }),
     meta: { alpha, prodLoads, durationMs, generatedAt }
   };
@@ -62665,7 +62680,7 @@ function serverGapLines(page, requests) {
   if (!failures) return [];
   const sides = ["base", "head"].filter((side) => failures[side].length > 0);
   const failed = (side) => `${SIDE_LABEL[side]} failed ${failures[side].length} of ${requests} requests (${[...new Set(failures[side])].join("; ")})`;
-  if (!page.metrics.Server) {
+  if (!page.metrics.Server && !page.serverStatic) {
     const why = sides.length > 0 ? listJoin(sides.map(failed)) : `fewer than ${MIN_SAMPLES} requests succeeded`;
     return [`- Server time on ${code(page.path)} was not compared: ${why}.`];
   }
@@ -62725,17 +62740,24 @@ function pageTable(page, hasProd) {
   const rows = shown.map(([metric, m]) => {
     const s = m.summary;
     const t = tested(metric, s);
-    const change = s.verdict === "no-change" ? formatChange(metric, t.baseMedian, t.headMedian, null) : `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`;
-    return `| ${[metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), change].join(" | ")} |`;
+    const st2 = m.server?.static;
+    let change = s.verdict === "no-change" ? formatChange(metric, t.baseMedian, t.headMedian, null) : `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`;
+    if (st2?.base && !st2.head) change = "not judged";
+    const cell = (side, v) => `${formatValue(metric, v)}${st2?.[side] ? `${NBSP}(static)` : ""}`;
+    return `| ${[metric, cell("base", s.baseMedian), cell("head", s.headMedian), change].join(" | ")} |`;
   });
   const server = page.metrics.Server;
+  const st = server?.server?.static;
+  const oneSided = st !== void 0 && st.base !== st.head;
+  const staticNote = oneSided ? st.head ? "Server now static" : "Server no longer static" : null;
   const prod = shown.flatMap(([metric, m]) => {
     const v = m.summary.vsProd?.prodMedian;
     return typeof v === "number" && Number.isFinite(v) ? [`${metric} ${formatValue(metric, v)}`] : [];
   });
   const notes = [
     firstByteDetail(shown),
-    server?.server ? serverDetail(server.server, server.summary.verdict) : null,
+    staticNote,
+    server?.server && !oneSided ? serverDetail(server.server, server.summary.verdict) : null,
     server?.server ? coldStartDetail(server.server.coldStarts) : null,
     hasProd && prod.length > 0 ? `prod for reference: ${prod.join(", ")}` : null
   ].filter((n) => n !== null);

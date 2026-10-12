@@ -202,8 +202,8 @@ describe('buildHistory', () => {
 		const history = buildHistory(
 			past,
 			result([
-				{ path: '/', metrics: { LCP: metric(2405), TBT: metric(105), Server: metric(120) }, dropped: [], failures: {}, serverFailures: null },
-				{ path: '/new', metrics: { LCP: metric(900) }, dropped: [], failures: {}, serverFailures: null },
+				{ path: '/', metrics: { LCP: metric(2405), TBT: metric(105), Server: metric(120) }, dropped: [], failures: {}, serverFailures: null, serverStatic: false },
+				{ path: '/new', metrics: { LCP: metric(900) }, dropped: [], failures: {}, serverFailures: null, serverStatic: false },
 			]),
 		)
 		expect(history).toEqual({

@@ -134,6 +134,12 @@ The requests use the mobile browser's user agent and your `headers`.
   the first byte, so the same slowdown is never counted twice.
 - **Cold requests among the measured ones** are left out of the Server row's test. Without the marker, at most 10% of a
   side's measured requests can be left out this way; more than that is how the server behaves, so they stay in.
+- **Static pages.** When the site sends `Server-Timing` on some pages, a side that sends none for a page is a prerendered
+  static file, not server code. Both sides static: the page gets no Server or cold start rows. Static on the PR only: the row
+  shows both first bytes, notes `Server now static`, and counts as an improvement. Static on main only: both values, the
+  note `Server no longer static` and `not judged`, never a regression. A static side's first byte is never compared with
+  the other side's `Server-Timing` total, so those cases test first bytes on both sides. A site that sends `Server-Timing`
+  nowhere in the run cannot be told from a static one, so it is judged as before.
 - **Why not the page loads' TTFB.** Each page load opens a fresh connection in a fresh browser context, and on serverless
   previews that first byte flips between about 0.1 s and 1.3 to 1.9 s for minutes at a time (most likely new connections
   landing on cold isolates). In A/A runs a verdict on it fired 63 to 73% of the time. Warm requests on kept-alive connections do not
@@ -395,7 +401,8 @@ switch between fast and slow first bytes for minutes at a time, on their own, an
 table's main and this PR columns still show the full medians, and Change shows the time after the first byte, so the two
 can disagree: when the first byte moved by more than the floor, a line under the first paint row says so, for example
 `first byte +312 ms, not counted`. Server time has its own row, measured on warm connections (see
-[Server time](#server-time)), so a server slowdown counts once, there.
+[Server time](#server-time)), so a server slowdown counts once, there. A static side has no server time and is labelled
+`static` in that row, see Static pages under Server time.
 
 **prod is for reference only.** Its medians sit on one line under each page's table and never change a verdict. Production
 can load third-party tags, real data and warm caches that the previews do not, so a gap between prod and the PR is usually

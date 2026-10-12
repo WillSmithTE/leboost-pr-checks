@@ -120,10 +120,11 @@ const serverSamples = (base: ServerTimeCentre, head: ServerTimeCentre = base): S
 		head: serverTimeSide('head', head, FIRST_REQUESTS, head.firstCold ?? []),
 	},
 })
-// `/` reports database time and queries in Server-Timing, `/docs` sends no Server-Timing.
+// `/` reports database time and queries in Server-Timing, `/docs` only the isolate marker, so both are server rendered.
+const DOCS_SSR: ServerTimeCentre = { ms: 60, marker: true }
 const SERVER: Record<string, ServerSamples> = {
 	'/': serverSamples({ ms: 120, db: 12, queries: 3 }),
-	'/docs': serverSamples({ ms: 60 }),
+	'/docs': serverSamples(DOCS_SSR),
 }
 
 interface ScenarioOptions {
@@ -232,7 +233,7 @@ const SCENARIOS: Record<string, RunResult> = {
 				{ ms: 120, marker: true, firstCold: [0, 1, 5], coldMs: 900, cold: [12] },
 				{ ms: 120, marker: true, firstCold: [0, 2], coldMs: 1400 },
 			),
-			'/docs': serverSamples({ ms: 60 }),
+			'/docs': serverSamples(DOCS_SSR),
 		},
 		bundle: { base: 33_810_000, head: 35_110_000 },
 	}),
@@ -240,9 +241,15 @@ const SCENARIOS: Record<string, RunResult> = {
 	'server-regression': scenario({
 		server: {
 			'/': serverSamples({ ms: 120, total: true, db: 12, queries: 3, cold: [4, 17] }, { ms: 420, total: true, db: 312, queries: 4 }),
-			'/docs': serverSamples({ ms: 60 }),
+			'/docs': serverSamples(DOCS_SSR),
 		},
 	}),
+	// `/docs` is a prerendered file on both sides (no Server-Timing at all): no Server or cold start rows for it.
+	'static-both': scenario({ server: { '/': SERVER['/'], '/docs': serverSamples({ ms: 25 }) } }),
+	// `/docs` was server rendered on main (Server-Timing total) and is a static file on the PR: an improvement.
+	'became-static': scenario({ server: { '/': SERVER['/'], '/docs': serverSamples({ ms: 140, total: true, marker: true }, { ms: 25 }) } }),
+	// The reverse: shown with both values and no verdict, never a regression.
+	'stopped-static': scenario({ server: { '/': SERVER['/'], '/docs': serverSamples({ ms: 25 }, { ms: 140, total: true, marker: true }) } }),
 	mixed: build(),
 	'missing-prod': scenario({ prod: false, docs: { ...DOCS, TBT: 80 } }),
 	'dropped-metric': scenario({ missing: { '/': { LCP: [0, 2, 3, 4, 5, 7] } } }),
@@ -500,11 +507,59 @@ describe('renderComment', () => {
 		// The clean run's `/` sends db 12 ms and 3 queries, unchanged.
 		expect(render(SCENARIOS.clean)).not.toContain('queries')
 		const noQueries = scenario({
-			server: { '/': serverSamples({ ms: 120, db: 0, queries: 0 }, { ms: 420, db: 0, queries: 0 }), '/docs': serverSamples({ ms: 60 }) },
+			server: { '/': serverSamples({ ms: 120, db: 0, queries: 0 }, { ms: 420, db: 0, queries: 0 }), '/docs': serverSamples(DOCS_SSR) },
 		})
 		const md = render(noQueries)
 		expect(md).toContain('- Server  /  300 ms slower')
 		expect(md).not.toContain('queries')
+	})
+
+	it('drops the Server and cold start rows for a page that is a static file on both sides', () => {
+		const result = SCENARIOS['static-both']
+		const [, docs] = result.pages
+		expect(docs.serverStatic).toBe(true)
+		expect(docs.metrics.Server).toBeUndefined()
+		const md = render(result)
+		const section = md.slice(md.indexOf('**`/docs`**'))
+		expect(section).not.toMatch(/Server|Cold starts|static/)
+		// The server rendered page keeps its row, and nothing is reported as incomplete.
+		expect(md).toContain('| Server | 120 ms | 120 ms |')
+		expect(md).not.toContain('Incomplete data')
+		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
+	})
+
+	it('treats a page that became static as an improvement, compared by first byte', () => {
+		const result = SCENARIOS['became-static']
+		const server = result.pages[1].metrics.Server
+		expect(server?.server?.static).toEqual({ base: false, head: true })
+		expect(server?.server?.source).toBe('ttfb')
+		expect(server?.summary.verdict).toBe('improved')
+		expect(countVerdicts(result)).toEqual({ regressions: 0, improvements: 1 })
+		expect(verdictKey(result)).toBe('clean')
+		const md = render(result)
+		expect(md).toContain('### Lab web vitals: 1 improvement vs main\n')
+		expect(md).toContain('+ Server  /docs  115 ms faster (82%)')
+		expect(md).toContain('| Server | 140 ms | 25 ms (static) | **Faster** −115 ms (−82%) |')
+		expect(md).toContain('Server now static')
+	})
+
+	it('never reads a page that stopped being static as a regression', () => {
+		const result = SCENARIOS['stopped-static']
+		const server = result.pages[1].metrics.Server
+		expect(server?.summary.verdict).toBe('no-change')
+		expect(countVerdicts(result)).toEqual({ regressions: 0, improvements: 0 })
+		expect(verdictKey(result)).toBe('clean')
+		const md = render(result)
+		expect(md).toContain('| Server | 25 ms (static) | 140 ms | not judged |')
+		expect(md).toContain('Server no longer static')
+		expect(md).not.toMatch(/Slower|\+ ?\d+ ms \(\+/)
+	})
+
+	it('keeps comparing first bytes when no page in the run ever sends Server-Timing', () => {
+		const plain = scenario({ server: { '/': serverSamples({ ms: 120 }), '/docs': serverSamples({ ms: 60 }, { ms: 360 }) } })
+		expect(plain.pages.every(p => !p.serverStatic)).toBe(true)
+		expect(plain.pages[1].metrics.Server?.summary.verdict).toBe('regressed')
+		expect(plain.pages[1].metrics.Server?.server?.static).toEqual({ base: false, head: false })
 	})
 
 	it('reports cold starts the server marked, from every phase, without judging them', () => {

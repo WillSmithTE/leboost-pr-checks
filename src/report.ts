@@ -45,10 +45,17 @@ export interface MedianPair {
 export interface ServerDetail {
 	// What was tested: Server-Timing's total when every good request on both sides carried one, else the first byte.
 	source: 'server-timing' | 'ttfb'
+	// A side that sends no Server-Timing while the site does elsewhere is a prerendered static file, not server code.
+	static: StaticSides
 	db: MedianPair | null
 	queries: MedianPair | null
 	coldStarts: ColdStarts
 	requests: { base: ServerLoad[]; head: ServerLoad[]; first: { base: ServerLoad[]; head: ServerLoad[] } }
+}
+
+export interface StaticSides {
+	base: boolean
+	head: boolean
 }
 
 // Requests that reached a cold server instance, from every phase, reported but never judged.
@@ -84,6 +91,8 @@ export interface PageResult {
 	failures: PageSamples['failures']
 	// Failed server time requests per side; null when server time was not measured.
 	serverFailures: ServerSamples['failures'] | null
+	// Both sides are static files: there is no server time to compare, so no Server or cold start rows.
+	serverStatic: boolean
 }
 
 export interface RunConfig {
@@ -171,7 +180,7 @@ export function summarisePage(
 	samples: PageSamples['samples'],
 	alpha: number,
 	{ floors = FLOORS, firstByte = FROM_FIRST_BYTE, contextOnly = CONTEXT_ONLY }: SummariseOptions = {},
-): Omit<PageResult, 'failures' | 'serverFailures'> {
+): Omit<PageResult, 'failures' | 'serverFailures' | 'serverStatic'> {
 	const metrics: PageResult['metrics'] = {}
 	const dropped: Dropped[] = []
 	for (const metric of LOAD_METRICS) {
@@ -251,14 +260,36 @@ function medianPair(base: readonly ServerSample[], head: readonly ServerSample[]
 	return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) }
 }
 
-// The Server metric from the server time requests, or null when either side has fewer than 3 good ones.
-export function summariseServer(samples: ServerSamples, alpha: number, floor: Floor = FLOORS.Server): MetricResult | null {
-	const good = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
-	const first = { base: good(samples.first?.base ?? []), head: good(samples.first?.head ?? []) }
-	const measured = { base: good(samples.base), head: good(samples.head) }
+const goodLoads = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
+const sendsTiming = (s: ServerSample): boolean => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null
+
+// Whether any good request carried Server-Timing. A site that never does cannot be told apart from static files.
+export const sendsServerTiming = (samples: ServerSamples): boolean =>
+	[samples.base, samples.head, samples.first?.base ?? [], samples.first?.head ?? []].some(side => goodLoads(side).some(sendsTiming))
+
+// A side is static when it has enough good requests and none carried Server-Timing.
+export function staticSides(samples: ServerSamples): StaticSides {
+	const isStatic = (measured: readonly ServerLoad[], first: readonly ServerLoad[] = []): boolean =>
+		goodLoads(measured).length >= MIN_SAMPLES && ![...goodLoads(first), ...goodLoads(measured)].some(sendsTiming)
+	return { base: isStatic(samples.base, samples.first?.base), head: isStatic(samples.head, samples.first?.head) }
+}
+
+// The Server metric from the server time requests, or null when either side has fewer than 3 good ones, or both are static.
+// A static side has no server time: it is compared by first byte and a page becoming static is an improvement, never a regression.
+export function summariseServer(
+	samples: ServerSamples,
+	alpha: number,
+	floor: Floor = FLOORS.Server,
+	statics: StaticSides = { base: false, head: false },
+): MetricResult | null {
+	if (statics.base && statics.head) return null
+	const anyStatic = statics.base || statics.head
+	const first = { base: goodLoads(samples.first?.base ?? []), head: goodLoads(samples.first?.head ?? []) }
+	const measured = { base: goodLoads(samples.base), head: goodLoads(samples.head) }
 	// Per side, since main may not send the marker yet: with it the server's word decides what was cold, without it the first byte.
 	const marked = (side: 'base' | 'head'): boolean => [...first[side], ...measured[side]].some(s => s.isolate !== null)
 	const split = (side: 'base' | 'head'): { warm: ServerSample[]; cold: number[] } => {
+		if (statics[side]) return { warm: measured[side], cold: [] }
 		if (marked(side)) {
 			return {
 				warm: measured[side].filter(s => s.isolate !== 'cold'),
@@ -280,19 +311,25 @@ export function summariseServer(samples: ServerSamples, alpha: number, floor: Fl
 	const h = split('head')
 	if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null
 	// One test never mixes Server-Timing totals with first bytes.
-	const source = [...b.warm, ...h.warm].every(s => s.total !== null) ? 'server-timing' : 'ttfb'
+	// A static side has no handler time, so both sides are compared by first byte.
+	const source = !anyStatic && [...b.warm, ...h.warm].every(s => s.total !== null) ? 'server-timing' : 'ttfb'
 	const value = (s: ServerSample): number => (source === 'server-timing' && s.total !== null ? s.total : s.ttfb)
 	const bKept = b.warm.map(value)
 	const hKept = h.warm.map(value)
 	const summary = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false)
 	// A percent of a base under the floor (a static server answering in 1 ms) means nothing.
 	if (summary.baseMedian < floor.absFloor) summary.deltaPct = null
+	if (anyStatic) {
+		// Static now is the improvement, whatever the test says, unless the static first byte is not lower. Static before is never a verdict.
+		summary.verdict = statics.head && summary.verdict !== 'regressed' && summary.headMedian <= summary.baseMedian ? 'improved' : 'no-change'
+	}
 	return {
 		base: bKept,
 		head: hKept,
 		summary,
 		server: {
 			source,
+			static: statics,
 			db: medianPair(b.warm, h.warm, 'db'),
 			queries: medianPair(b.warm, h.warm, 'queries'),
 			coldStarts: {
@@ -324,6 +361,8 @@ export function buildResult({
 	bundle = null,
 	...meta
 }: BuildInput): RunResult {
+	// Static is only told apart from SSR when the site sends Server-Timing somewhere in the run.
+	const timed = pages.some(p => p.server && sendsServerTiming(p.server))
 	return {
 		version: 1,
 		bundle: bundle && (bundle.base !== null || bundle.head !== null) ? bundle : null,
@@ -339,9 +378,10 @@ export function buildResult({
 		config: meta.config,
 		pages: pages.map(p => {
 			const page = summarisePage(p.path, p.loads, alpha)
-			const server = p.server ? summariseServer(p.server, alpha) : null
+			const statics = p.server && timed ? staticSides(p.server) : { base: false, head: false }
+			const server = p.server ? summariseServer(p.server, alpha, undefined, statics) : null
 			if (server) page.metrics.Server = server
-			return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null }
+			return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null, serverStatic: statics.base && statics.head }
 		}),
 		meta: { alpha, prodLoads, durationMs, generatedAt },
 	}
@@ -540,7 +580,7 @@ function serverGapLines(page: PageResult, requests: number): string[] {
 	const sides = (['base', 'head'] as const).filter(side => failures[side].length > 0)
 	const failed = (side: 'base' | 'head'): string =>
 		`${SIDE_LABEL[side]} failed ${failures[side].length} of ${requests} requests (${[...new Set(failures[side])].join('; ')})`
-	if (!page.metrics.Server) {
+	if (!page.metrics.Server && !page.serverStatic) {
 		const why = sides.length > 0 ? listJoin(sides.map(failed)) : `fewer than ${MIN_SAMPLES} requests succeeded`
 		return [`- Server time on ${code(page.path)} was not compared: ${why}.`]
 	}
@@ -621,21 +661,29 @@ function pageTable(page: PageResult, hasProd: boolean): string[] {
 	const rows = shown.map(([metric, m]) => {
 		const s = m.summary
 		const t = tested(metric, s)
+		const st = m.server?.static
 		// A percent only where the change counts; on a quiet row it is noise and wraps the cell on a phone.
-		const change =
+		let change =
 			s.verdict === 'no-change'
 				? formatChange(metric, t.baseMedian, t.headMedian, null)
 				: `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`
-		return `| ${[metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), change].join(' | ')} |`
+		// A static side's first byte is not server time, so a page that stopped being static gets no verdict and no sign.
+		if (st?.base && !st.head) change = 'not judged'
+		const cell = (side: 'base' | 'head', v: number): string => `${formatValue(metric, v)}${st?.[side] ? `${NBSP}(static)` : ''}`
+		return `| ${[metric, cell('base', s.baseMedian), cell('head', s.headMedian), change].join(' | ')} |`
 	})
 	const server = page.metrics.Server
+	const st = server?.server?.static
+	const oneSided = st !== undefined && st.base !== st.head
+	const staticNote = oneSided ? (st.head ? 'Server now static' : 'Server no longer static') : null
 	const prod = shown.flatMap(([metric, m]) => {
 		const v = m.summary.vsProd?.prodMedian
 		return typeof v === 'number' && Number.isFinite(v) ? [`${metric} ${formatValue(metric, v)}`] : []
 	})
 	const notes = [
 		firstByteDetail(shown),
-		server?.server ? serverDetail(server.server, server.summary.verdict) : null,
+		staticNote,
+		server?.server && !oneSided ? serverDetail(server.server, server.summary.verdict) : null,
 		server?.server ? coldStartDetail(server.server.coldStarts) : null,
 		hasProd && prod.length > 0 ? `prod for reference: ${prod.join(', ')}` : null,
 	].filter((n): n is string => n !== null)

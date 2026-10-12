@@ -68,8 +68,9 @@ export const CONTEXT_ONLY: readonly MetricName[] = ['TTFB']
 export const DEFAULT_SERVER_SAMPLES = 30
 // Requests per side and path on a new connection each, before the warm-up: the likeliest way to reach a cold instance.
 export const SERVER_NEW_CONNECTIONS = 10
-// Discarded requests per side and path before the measured ones, to wake cold isolates and open connections.
-export const SERVER_WARM_UP = 3
+// Kept-alive connections per side and path. Each opens with one warm-up request; the measured ones rotate over them, since
+// one connection stays on one server machine and two machines can differ by tens of ms.
+export const SERVER_CONNECTIONS = 5
 export const SERVER_TIMEOUT_MS = 30_000
 // Without a Server-Timing isolate marker, a time over max(factor x the side's warm median, median + plusMs) is a cold
 // start. Up to maxShare of the measured requests are left out of the test; more is how the server behaves, so they stay in.

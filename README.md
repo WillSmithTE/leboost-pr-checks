@@ -104,10 +104,12 @@ This run's main is the newest point. Runs on another device or base URL are neve
 ## Server time
 
 Before any page loads, the action sends plain GET requests (no browser, no throttling) to each path on main and the PR,
-alternating main and PR: 10 per side on a new connection each, 3 warm-up requests, then `server-samples` (30) per side on
-kept-alive connections. Those last ones are timed from sending the request to the first byte of the response, with
-connection setup left out, so it is the server's work plus one network round trip from the runner. The requests use the
-mobile browser's user agent and your `headers`.
+alternating main and PR: 10 per side on a new connection each, then 5 kept-alive connections per side that each get one
+warm-up request, then `server-samples` (30) per side rotating over those 5. The measured ones are timed from sending the
+request to the first byte of the response, with connection setup left out, so it is the server's work plus one network
+round trip from the runner. Rotating matters: a connection stays on one server machine, and with a single connection
+per side two deployments of the same Usero code read 34 to 58 ms apart, most likely one machine against another.
+The requests use the mobile browser's user agent and your `headers`.
 
 - **Cold starts are reported apart, not judged.** On serverless hosts a request that lands on a cold instance pays its
   start-up (loading and evaluating the server bundle), and at low traffic that is most first visits. New connections are
@@ -313,7 +315,7 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
   test key for your RUM tool), the same way you keep preview data out of your production database. The test loads land
   there instead of in your real numbers.
 - A run sends 2 warm-up loads plus `rounds` x 2 loads per path to the previews: 18 page views for one path at the defaults.
-  Server time adds 43 plain GETs per side and path (10 on new connections, 3 warm-up, `server-samples` measured) that run
+  Server time adds 45 plain GETs per side and path (10 on new connections, 5 warm-up, `server-samples` measured) that run
   no page scripts, so only server-side analytics count them.
 - `prod-url` loads are real visits to production and send real hits to your production analytics (3 per path per run). Leave
   `prod-url` out if that matters.
@@ -334,7 +336,7 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
 ## Run time
 
 A load takes 2 to 10 seconds at the mobile profile, depending on the page. A run is 2 warm-up loads plus, per path,
-`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. Server time comes first and takes seconds: 86 requests
+`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. Server time comes first and takes seconds: 90 requests
 per path at your server's speed, plus a second or so for each cold start it meets. With the default 8 rounds on one path, the action took
 52 s on the demo's one-page static site and 93 s on a small marketing site's home page. On Usero (pages of about 1 MB) 8
 rounds on two paths with prod took 6.5 to 7 minutes.

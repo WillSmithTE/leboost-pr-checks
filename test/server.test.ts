@@ -2,7 +2,15 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { coldLimit, summariseServer } from '../src/report'
-import { parseServerTiming, type ServerLoad, type ServerSample, sampleServer, timeNewConnection, timeRequest } from '../src/server'
+import {
+	closeConnection,
+	keptAliveConnection,
+	parseServerTiming,
+	type ServerLoad,
+	type ServerSample,
+	sampleServer,
+	timeGet,
+} from '../src/server'
 
 const quiet = () => {}
 const none = { total: null, db: null, queries: null, isolate: null }
@@ -38,10 +46,10 @@ describe('parseServerTiming', () => {
 })
 
 describe('sampleServer', () => {
-	it('sends new-connection and warm-up requests first and keeps them apart, then alternates main and PR', async () => {
+	it('sends new-connection and one warm-up request per connection first, then alternates main and PR over the connections', async () => {
 		const calls: string[] = []
-		const send = (kind: string) => async (url: string): Promise<ServerSample> => {
-			calls.push(`${kind}${url.includes('main') ? 'b' : 'h'}`)
+		const record = (call: string): ServerSample => {
+			calls.push(call)
 			if (calls.length === 10) throw new Error('HTTP 502\nmore')
 			return { ...none, ttfb: calls.length }
 		}
@@ -51,13 +59,13 @@ describe('sampleServer', () => {
 			headUrl: 'https://pr.test/',
 			samples: 3,
 			newConnections: 2,
-			warmUp: 2,
-			request: send('w'),
-			newConnection: send('n'),
+			connections: 2,
+			request: async (url, side, i) => record(`${side === 'base' ? 'b' : 'h'}${i}`),
+			newConnection: async url => record(`n${url.includes('main') ? 'b' : 'h'}`),
 			log: quiet,
 		})
-		// New connections b h, h b; warm-up b h, h b; then rounds b h, h b, b h.
-		expect(calls.join(' ')).toBe('nb nh nh nb wb wh wh wb wb wh wh wb wb wh')
+		// New connections b h, h b; warm-up on connections 0 and 1; then rounds on 0, 1, 0.
+		expect(calls.join(' ')).toBe('nb nh nh nb b0 h0 h1 b1 b0 h0 h1 b1 b0 h0')
 		expect(out.first?.base.map(s => s?.ttfb ?? null)).toEqual([1, 4, 5, 8])
 		expect(out.base.map(s => s?.ttfb ?? null)).toEqual([9, 12, 13])
 		expect(out.head).toEqual([null, { ...none, ttfb: 11 }, { ...none, ttfb: 14 }])
@@ -65,7 +73,7 @@ describe('sampleServer', () => {
 	})
 })
 
-describe('timeRequest and timeNewConnection', () => {
+describe('timeGet', () => {
 	let server: Server
 	let origin = ''
 	const connections = new Set<unknown>()
@@ -91,28 +99,42 @@ describe('timeRequest and timeNewConnection', () => {
 	})
 	afterAll(() => new Promise<void>(resolve => server.close(() => resolve())))
 
-	it('times the first byte and reads Server-Timing', async () => {
-		const fast = await timeRequest(`${origin}/`, {})
-		const slow = await timeRequest(`${origin}/slow`, { 'x-bypass': 'yes' })
-		expect(fast).toMatchObject({ total: 2, db: 1.5, queries: 2, isolate: 'warm' })
-		expect(slow.total).toBe(152)
-		// The server holds /slow for 150 ms; upper bounds stay loose for a busy test machine.
-		expect(slow.ttfb).toBeGreaterThanOrEqual(145)
-		expect(slow.ttfb).toBeLessThan(2000)
-		expect(fast.ttfb).toBeGreaterThanOrEqual(0)
+	it('keeps one connection alive, times the first byte and reads Server-Timing', async () => {
+		const connection = keptAliveConnection()
+		const before = connections.size
+		try {
+			const fast = await timeGet(`${origin}/`, {}, connection)
+			const slow = await timeGet(`${origin}/slow`, { 'x-bypass': 'yes' }, connection)
+			const moved = await timeGet(`${origin}/moved`, {}, connection)
+			expect(fast).toMatchObject({ total: 2, db: 1.5, queries: 2, isolate: 'warm' })
+			expect(slow.total).toBe(152)
+			// The server holds /slow for 150 ms; upper bounds stay loose for a busy test machine.
+			expect(slow.ttfb).toBeGreaterThanOrEqual(145)
+			expect(slow.ttfb).toBeLessThan(2000)
+			expect(fast.ttfb).toBeGreaterThanOrEqual(0)
+			expect(moved.total).toBe(2)
+			expect(connections.size - before).toBe(1)
+		} finally {
+			closeConnection(connection)
+		}
 	})
 
 	it('fails on an HTTP error, and on a timeout', async () => {
-		await expect(timeRequest(`${origin}/missing`, {})).rejects.toThrow('HTTP 404')
-		await expect(timeRequest(`${origin}/slow`, {}, 20)).rejects.toThrow()
-		await expect(timeNewConnection(`${origin}/missing`, {})).rejects.toThrow('HTTP 404')
-		await expect(timeNewConnection(`${origin}/slow`, {}, 20)).rejects.toThrow()
+		const connection = keptAliveConnection()
+		try {
+			await expect(timeGet(`${origin}/missing`, {}, connection)).rejects.toThrow('HTTP 404')
+			await expect(timeGet(`${origin}/slow`, {}, connection, 20)).rejects.toThrow()
+		} finally {
+			closeConnection(connection)
+		}
+		await expect(timeGet(`${origin}/missing`, {}, null)).rejects.toThrow('HTTP 404')
+		await expect(timeGet(`${origin}/slow`, {}, null, 20)).rejects.toThrow()
 	})
 
-	it('opens a new connection per request, follows redirects and reads Server-Timing', async () => {
+	it('opens a new connection per request without one, follows redirects and reads Server-Timing', async () => {
 		const before = connections.size
-		const slow = await timeNewConnection(`${origin}/slow`, {})
-		const moved = await timeNewConnection(`${origin}/moved`, {})
+		const slow = await timeGet(`${origin}/slow`, {}, null)
+		const moved = await timeGet(`${origin}/moved`, {}, null)
 		expect(slow).toMatchObject({ total: 152, isolate: 'warm' })
 		expect(slow.ttfb).toBeGreaterThanOrEqual(145)
 		expect(moved.total).toBe(2)

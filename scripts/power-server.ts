@@ -1,14 +1,15 @@
 // Detection power of the Server row. collect: real servers behind local proxies, one of which adds a known delay on
 // head only, sampled in runs exactly like the Action. analyze: the Action's verdict per run and on resampled runs.
 import { readFile, writeFile } from 'node:fs/promises'
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { createServer, request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http'
+import { request as httpsRequest } from 'node:https'
+import type { AddressInfo, Socket } from 'node:net'
 import { parseArgs } from 'node:util'
-import { DEFAULT_ALPHA, DEFAULT_SERVER_SAMPLES, SERVER_WARM_UP } from '../src/config'
+import { DEFAULT_ALPHA, DEFAULT_SERVER_SAMPLES, SERVER_CONNECTIONS } from '../src/config'
 import { isRecord } from '../src/github'
 import { summariseServer } from '../src/report'
 import { joinUrl, roundOrder } from '../src/run'
-import { type ServerLoad, serverRequestHeaders, timeRequest } from '../src/server'
+import { type Connection, closeConnection, keptAliveConnection, type ServerLoad, serverRequestHeaders, timeGet } from '../src/server'
 
 interface Condition {
 	name: string
@@ -28,36 +29,49 @@ interface Collected {
 	runs: Record<string, Run[]>
 }
 
-const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'host', 'content-length', 'content-encoding'])
+const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'host'])
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 // A slower server is also a larger Server-Timing total.
-const addToTotal =(header: string, ms: number): string =>
+const addToTotal = (header: string, ms: number): string =>
 	header.replace(/(^|,)(\s*total\s*;(?:[^,]*;)?\s*dur\s*=\s*)([\d.]+)/i, (_, start: string, lead: string, dur: string) => `${start}${lead}${Number(dur) + ms}`)
 
-// Forwards each request to the upstream origin and holds the response headers for delayMs.
+// Forwards each request to the upstream origin, raw, and holds the response headers for delayMs. Each connection to the
+// proxy gets its own kept-alive upstream connection, so the action's connection rotation reaches the upstream unchanged.
 async function startProxy({ upstream, delayMs }: Condition): Promise<{ origin: string; close: () => Promise<void> }> {
-	const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-		const headers = new Headers()
-		for (const [name, value] of Object.entries(req.headers)) if (typeof value === 'string' && !HOP_BY_HOP.has(name)) headers.set(name, value)
-		const upstreamResponse = await fetch(new URL(req.url ?? '/', upstream), { headers, redirect: 'manual' })
-		if (delayMs > 0) await sleep(delayMs)
-		const out: Record<string, string> = {}
-		// fetch decodes the body, so its encoding and length headers no longer apply.
-		upstreamResponse.headers.forEach((value, name) => {
-			if (!HOP_BY_HOP.has(name)) out[name] = name === 'server-timing' ? addToTotal(value, delayMs) : value
-		})
-		res.writeHead(upstreamResponse.status, out)
-		const reader = upstreamResponse.body?.getReader()
-		for (let chunk = await reader?.read(); chunk && !chunk.done; chunk = await reader?.read()) res.write(chunk.value)
-		res.end()
-	}
-	const server = createServer((req, res) => {
-		handle(req, res).catch((err: unknown) => {
+	const upstreamFor = new WeakMap<Socket, Connection>()
+	const handle = (req: IncomingMessage, res: ServerResponse): void => {
+		let connection = upstreamFor.get(req.socket)
+		if (!connection) {
+			const created = keptAliveConnection()
+			upstreamFor.set(req.socket, created)
+			req.socket.once('close', () => closeConnection(created))
+			connection = created
+		}
+		const target = new URL(req.url ?? '/', upstream)
+		const https = target.protocol === 'https:'
+		const headers: OutgoingHttpHeaders = {}
+		for (const [name, value] of Object.entries(req.headers)) if (!HOP_BY_HOP.has(name)) headers[name] = value
+		const send = https ? httpsRequest : httpRequest
+		const fail = (err: unknown): void => {
 			if (!res.headersSent) res.writeHead(502)
 			res.end(String(err))
+		}
+		const up = send(target, { headers, agent: https ? connection.https : connection.http }, upRes => {
+			const out: OutgoingHttpHeaders = {}
+			for (const [name, value] of Object.entries(upRes.headers)) {
+				if (HOP_BY_HOP.has(name)) continue
+				out[name] = name === 'server-timing' && typeof value === 'string' ? addToTotal(value, delayMs) : value
+			}
+			sleep(delayMs).then(() => {
+				res.writeHead(upRes.statusCode ?? 502, out)
+				upRes.pipe(res)
+			}, fail)
 		})
-	})
+		up.on('error', fail)
+		up.end()
+	}
+	const server = createServer(handle)
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
 	const { port } = server.address() as AddressInfo
 	return { origin: `http://127.0.0.1:${port}`, close: () => new Promise(resolve => server.close(() => resolve())) }
@@ -75,21 +89,24 @@ async function collect(args: Args): Promise<void> {
 	const proxies = await Promise.all(conditions.map(startProxy))
 	const headers = serverRequestHeaders('mobile', {})
 	const data: Collected = { base: args.base, head, conditions, samples, startedAt: new Date().toISOString(), runs: {} }
-	const request = (i: number, path: string): Promise<ServerLoad> =>
-		timeRequest(joinUrl(proxies[i].origin, path), headers).catch((err: unknown) => {
-			console.log(`  ${conditions[i].name} ${path} failed: ${String(err).split('\n')[0]}`)
-			return null
-		})
 	const order = conditions.map((_, i) => i)
 	try {
 		for (const path of args.path ?? ['/']) {
 			data.runs[path] = []
 			for (let r = 0; r < Number(args.runs); r++) {
-				for (let w = 0; w < SERVER_WARM_UP; w++) for (const i of roundOrder(order, w)) await request(i, path)
+				// Fresh connections per run, as each action run opens its own: one warm-up each, then rotation.
+				const pools = conditions.map(() => Array.from({ length: SERVER_CONNECTIONS }, keptAliveConnection))
+				const request = (i: number, k: number): Promise<ServerLoad> =>
+					timeGet(joinUrl(proxies[i].origin, path), headers, pools[i][k % SERVER_CONNECTIONS]).catch((err: unknown) => {
+						console.log(`  ${conditions[i].name} ${path} failed: ${String(err).split('\n')[0]}`)
+						return null
+					})
+				for (let w = 0; w < SERVER_CONNECTIONS; w++) for (const i of roundOrder(order, w)) await request(i, w)
 				const run: Run = Object.fromEntries(conditions.map(c => [c.name, []]))
 				for (let round = 0; round < samples; round++) {
-					for (const i of roundOrder(order, round)) run[conditions[i].name].push(await request(i, path))
+					for (const i of roundOrder(order, round)) run[conditions[i].name].push(await request(i, round))
 				}
+				for (const connection of pools.flat()) closeConnection(connection)
 				data.runs[path].push(run)
 				const medians = conditions.map(c => `${c.name} ${Math.round(medianOf(run[c.name]))}`).join(', ')
 				console.log(`${path} run ${r + 1}: ${medians} ms`)

@@ -27050,7 +27050,7 @@ var require_async = __commonJS({
       } else {
         _defer = fallback;
       }
-      var nextTick2 = wrap(_defer);
+      var nextTick = wrap(_defer);
       var _parallel = awaitify((eachfn, tasks, callback) => {
         var results = isArrayLike(tasks) ? [] : {};
         eachfn(tasks, (task, key, taskCb) => {
@@ -27527,7 +27527,7 @@ var require_async = __commonJS({
         mapValuesLimit: mapValuesLimit$1,
         mapValuesSeries,
         memoize,
-        nextTick: nextTick2,
+        nextTick,
         parallel,
         parallelLimit,
         priorityQueue,
@@ -27656,7 +27656,7 @@ var require_async = __commonJS({
       exports3.mapValuesLimit = mapValuesLimit$1;
       exports3.mapValuesSeries = mapValuesSeries;
       exports3.memoize = memoize;
-      exports3.nextTick = nextTick2;
+      exports3.nextTick = nextTick;
       exports3.parallel = parallel;
       exports3.parallelLimit = parallelLimit;
       exports3.priorityQueue = priorityQueue;
@@ -28492,11 +28492,11 @@ var require_process_nextick_args = __commonJS({
   "node_modules/process-nextick-args/index.js"(exports2, module) {
     "use strict";
     if (typeof process === "undefined" || !process.version || process.version.indexOf("v0.") === 0 || process.version.indexOf("v1.") === 0 && process.version.indexOf("v1.8.") !== 0) {
-      module.exports = { nextTick: nextTick2 };
+      module.exports = { nextTick };
     } else {
       module.exports = process;
     }
-    function nextTick2(fn, arg1, arg2, arg3) {
+    function nextTick(fn, arg1, arg2, arg3) {
       if (typeof fn !== "function") {
         throw new TypeError('"callback" argument must be a function');
       }
@@ -61726,7 +61726,7 @@ var FROM_FIRST_BYTE = ["LCP", "FCP"];
 var CONTEXT_ONLY = ["TTFB"];
 var DEFAULT_SERVER_SAMPLES = 30;
 var SERVER_NEW_CONNECTIONS = 10;
-var SERVER_WARM_UP = 3;
+var SERVER_CONNECTIONS = 5;
 var SERVER_TIMEOUT_MS = 3e4;
 var COLD = { factor: 3, plusMs: 300, maxShare: 0.1 };
 var DEFAULT_ALPHA = 0.05;
@@ -106162,8 +106162,8 @@ async function measureLoad(browser, url3, { device, interaction, settleMs, idleT
 }
 
 // src/server.ts
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 var DOCUMENT_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 function serverRequestHeaders(device, extra) {
   const headers = { "user-agent": DEVICES[device].userAgent, accept: DOCUMENT_ACCEPT };
@@ -106224,28 +106224,26 @@ function parseServerTiming(header) {
   out.queries = dbCount ?? (dbEntries > 1 ? dbEntries : null);
   return out;
 }
-var nextTick = () => new Promise((resolve2) => setImmediate(resolve2));
-async function timeRequest(url3, headers, timeoutMs = SERVER_TIMEOUT_MS) {
-  performance.clearResourceTimings();
-  const started = performance.now();
-  const response = await fetch(url3, { headers, redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
-  const wall = performance.now() - started;
-  await response.arrayBuffer();
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  await nextTick();
-  const entry = performance.getEntriesByType("resource").filter((e) => e.name === url3).at(-1);
-  const timing = entry instanceof PerformanceResourceTiming && entry.responseStart >= entry.requestStart && entry.requestStart > 0 ? entry : null;
-  const ttfb = timing ? timing.responseStart - timing.requestStart : wall;
-  return { ttfb: Math.round(ttfb * 10) / 10, ...parseServerTiming(response.headers.get("server-timing")) };
-}
 var MAX_REDIRECTS = 5;
-function timeNewConnection(url3, headers, timeoutMs = SERVER_TIMEOUT_MS) {
-  const started = performance.now();
+var keptAliveConnection = () => ({
+  http: new HttpAgent({ keepAlive: true, maxSockets: 1 }),
+  https: new HttpsAgent({ keepAlive: true, maxSockets: 1 })
+});
+function closeConnection(connection) {
+  connection.http.destroy();
+  connection.https.destroy();
+}
+function timeGet(url3, headers, connection, timeoutMs = SERVER_TIMEOUT_MS) {
   const deadline = AbortSignal.timeout(timeoutMs);
+  let started = null;
   const get = (target, hops) => new Promise((resolve2, reject) => {
-    const send = target.protocol === "https:" ? httpsRequest : httpRequest;
-    const req = send(target, { headers, agent: false, signal: deadline }, (res) => {
-      const ttfb = performance.now() - started;
+    const https3 = target.protocol === "https:";
+    const send = https3 ? httpsRequest : httpRequest;
+    const agent = connection === null ? false : https3 ? connection.https : connection.http;
+    const sentAt = performance.now();
+    if (connection === null) started ??= sentAt;
+    const req = send(target, { headers, agent, signal: deadline }, (res) => {
+      const ttfb = performance.now() - (started ?? sentAt);
       const status = res.statusCode ?? 0;
       const location = res.headers.location;
       res.resume();
@@ -106262,6 +106260,11 @@ function timeNewConnection(url3, headers, timeoutMs = SERVER_TIMEOUT_MS) {
       });
     });
     req.on("error", reject);
+    req.on("socket", (socket) => {
+      if (connection === null || started !== null) return;
+      if (!socket.connecting) started = performance.now();
+      else socket.once(https3 ? "secureConnect" : "connect", () => started ??= performance.now());
+    });
     req.end();
   });
   return get(new URL(url3), 0);
@@ -106280,7 +106283,7 @@ async function sampleServer({
   headUrl,
   samples,
   newConnections,
-  warmUp: warmUp2,
+  connections,
   request: request2,
   newConnection,
   log: log3
@@ -106295,7 +106298,7 @@ async function sampleServer({
     const line = [];
     for (let i = 0; i < rounds; i++) {
       for (const side of roundOrder(sides, i)) {
-        const sample = await send(side.url).catch((err) => {
+        const sample = await send(side.url, side.name, i).catch((err) => {
           line.push(`${side.label} failed (${firstLine(err)})`);
           return null;
         });
@@ -106305,13 +106308,13 @@ async function sampleServer({
     }
     if (line.length > 0) log3(`  ${path4} server ${label}: ${line.join("; ")}`);
   };
-  await phase("new connections", newConnections, newConnection);
-  await phase("warm-up", warmUp2, request2);
+  await phase("new connections", newConnections, (url3) => newConnection(url3));
+  await phase("warm-up", connections, request2);
   for (let round2 = 0; round2 < samples; round2++) {
     const line = [];
     for (const side of roundOrder(sides, round2)) {
       try {
-        const sample = await request2(side.url);
+        const sample = await request2(side.url, side.name, round2 % connections);
         out[side.name].push(sample);
         line.push(`${side.label} ${logLine(sample)}`);
       } catch (err) {
@@ -106333,20 +106336,28 @@ async function measureServer(run2) {
   const headers = serverRequestHeaders(run2.device, run2.headers);
   for (const page of run2.pages) {
     run2.log(
-      `${page.path}: server time, ${SERVER_NEW_CONNECTIONS} on new connections, ${SERVER_WARM_UP} warm-up and ${run2.serverSamples} measured requests per side`
+      `${page.path}: server time, ${SERVER_NEW_CONNECTIONS} on new connections, then ${run2.serverSamples} measured requests per side over ${SERVER_CONNECTIONS} kept-alive connections`
     );
-    const samples = await sampleServer({
-      path: page.path,
-      baseUrl: run2.baseUrl,
-      headUrl: run2.headUrl,
-      samples: run2.serverSamples,
-      newConnections: SERVER_NEW_CONNECTIONS,
-      warmUp: SERVER_WARM_UP,
-      request: (url3) => timeRequest(url3, headers),
-      newConnection: (url3) => timeNewConnection(url3, headers),
-      log: run2.log
-    });
-    out.set(page.path, samples);
+    const pools = {
+      base: Array.from({ length: SERVER_CONNECTIONS }, keptAliveConnection),
+      head: Array.from({ length: SERVER_CONNECTIONS }, keptAliveConnection)
+    };
+    try {
+      const samples = await sampleServer({
+        path: page.path,
+        baseUrl: run2.baseUrl,
+        headUrl: run2.headUrl,
+        samples: run2.serverSamples,
+        newConnections: SERVER_NEW_CONNECTIONS,
+        connections: SERVER_CONNECTIONS,
+        request: (url3, side, i) => timeGet(url3, headers, pools[side][i]),
+        newConnection: (url3) => timeGet(url3, headers, null),
+        log: run2.log
+      });
+      out.set(page.path, samples);
+    } finally {
+      for (const connection of [...pools.base, ...pools.head]) closeConnection(connection);
+    }
   }
   return out;
 }

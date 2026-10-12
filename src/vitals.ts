@@ -1,11 +1,11 @@
 // One full run: server time per page first, then warm up the previews and interleaved page loads in one headless Chrome.
 import { chromium } from 'playwright-core'
-import { DEFAULT_PROD_LOADS, DEVICES, type DeviceName, IDLE_TIMEOUT_MS, SERVER_NEW_CONNECTIONS, SERVER_WARM_UP, SETTLE_MS } from './config'
+import { DEFAULT_PROD_LOADS, DEVICES, type DeviceName, IDLE_TIMEOUT_MS, SERVER_CONNECTIONS, SERVER_NEW_CONNECTIONS, SETTLE_MS } from './config'
 import { sendHeaders } from './headers'
 import { measureLoad } from './measure'
 import type { PageInput } from './report'
 import { type Log, type PageSpec, type Side, samplePage, warmUp } from './run'
-import { type ServerSamples, sampleServer, serverRequestHeaders, timeNewConnection, timeRequest } from './server'
+import { closeConnection, keptAliveConnection, type ServerSamples, sampleServer, serverRequestHeaders, timeGet } from './server'
 
 export interface VitalsRun {
 	executablePath: string
@@ -27,20 +27,28 @@ async function measureServer(run: VitalsRun): Promise<Map<string, ServerSamples>
 	const headers = serverRequestHeaders(run.device, run.headers)
 	for (const page of run.pages) {
 		run.log(
-			`${page.path}: server time, ${SERVER_NEW_CONNECTIONS} on new connections, ${SERVER_WARM_UP} warm-up and ${run.serverSamples} measured requests per side`,
+			`${page.path}: server time, ${SERVER_NEW_CONNECTIONS} on new connections, then ${run.serverSamples} measured requests per side over ${SERVER_CONNECTIONS} kept-alive connections`,
 		)
-		const samples = await sampleServer({
-			path: page.path,
-			baseUrl: run.baseUrl,
-			headUrl: run.headUrl,
-			samples: run.serverSamples,
-			newConnections: SERVER_NEW_CONNECTIONS,
-			warmUp: SERVER_WARM_UP,
-			request: url => timeRequest(url, headers),
-			newConnection: url => timeNewConnection(url, headers),
-			log: run.log,
-		})
-		out.set(page.path, samples)
+		const pools = {
+			base: Array.from({ length: SERVER_CONNECTIONS }, keptAliveConnection),
+			head: Array.from({ length: SERVER_CONNECTIONS }, keptAliveConnection),
+		}
+		try {
+			const samples = await sampleServer({
+				path: page.path,
+				baseUrl: run.baseUrl,
+				headUrl: run.headUrl,
+				samples: run.serverSamples,
+				newConnections: SERVER_NEW_CONNECTIONS,
+				connections: SERVER_CONNECTIONS,
+				request: (url, side, i) => timeGet(url, headers, pools[side][i]),
+				newConnection: url => timeGet(url, headers, null),
+				log: run.log,
+			})
+			out.set(page.path, samples)
+		} finally {
+			for (const connection of [...pools.base, ...pools.head]) closeConnection(connection)
+		}
 	}
 	return out
 }

@@ -1,7 +1,7 @@
 // Server time: plain GETs (no browser, no throttling) to each path on main and the PR, interleaved. New connections first
 // to catch cold starts, then warm kept-alive connections for the judged Server row.
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
+import { Agent as HttpAgent, request as httpRequest } from 'node:http'
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { DEVICES, type DeviceName, SERVER_TIMEOUT_MS } from './config'
 import { firstLine, joinUrl, type Log, roundOrder } from './run'
 
@@ -104,40 +104,38 @@ export function parseServerTiming(header: string | null): ServerTiming {
 	return out
 }
 
-const nextTick = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
-
-// One GET: first byte from Node's resource timing (requestStart to responseStart), so a new connection's
-// setup is left out; the wall time to the headers if no entry was recorded.
-export async function timeRequest(url: string, headers: Record<string, string>, timeoutMs = SERVER_TIMEOUT_MS): Promise<ServerSample> {
-	performance.clearResourceTimings()
-	const started = performance.now()
-	const response = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) })
-	const wall = performance.now() - started
-	// Read to the end so the connection is free for the next request.
-	await response.arrayBuffer()
-	if (!response.ok) throw new Error(`HTTP ${response.status}`)
-	await nextTick()
-	const entry = performance
-		.getEntriesByType('resource')
-		.filter(e => e.name === url)
-		.at(-1)
-	const timing = entry instanceof PerformanceResourceTiming && entry.responseStart >= entry.requestStart && entry.requestStart > 0 ? entry : null
-	const ttfb = timing ? timing.responseStart - timing.requestStart : wall
-	return { ttfb: Math.round(ttfb * 10) / 10, ...parseServerTiming(response.headers.get('server-timing')) }
-}
-
 const MAX_REDIRECTS = 5
 
-// One GET on a new connection, as a first-time visitor makes it: time from the start to the first response byte,
-// connection setup included, following redirects. A new connection is how a request lands on a cold server instance.
-export function timeNewConnection(url: string, headers: Record<string, string>, timeoutMs = SERVER_TIMEOUT_MS): Promise<ServerSample> {
-	const started = performance.now()
+// One kept-alive connection per origin protocol; requests on it go one at a time.
+export interface Connection {
+	http: HttpAgent
+	https: HttpsAgent
+}
+
+export const keptAliveConnection = (): Connection => ({
+	http: new HttpAgent({ keepAlive: true, maxSockets: 1 }),
+	https: new HttpsAgent({ keepAlive: true, maxSockets: 1 }),
+})
+
+export function closeConnection(connection: Connection): void {
+	connection.http.destroy()
+	connection.https.destroy()
+}
+
+// One GET, following redirects, to the first response byte. On a kept-alive connection the clock starts once the socket is
+// connected, so setup is left out; on a new connection (null) it starts at once, as a first-time visitor waits.
+export function timeGet(url: string, headers: Record<string, string>, connection: Connection | null, timeoutMs = SERVER_TIMEOUT_MS): Promise<ServerSample> {
 	const deadline = AbortSignal.timeout(timeoutMs)
+	let started: number | null = null
 	const get = (target: URL, hops: number): Promise<ServerSample> =>
 		new Promise((resolve, reject) => {
-			const send = target.protocol === 'https:' ? httpsRequest : httpRequest
-			const req = send(target, { headers, agent: false, signal: deadline }, res => {
-				const ttfb = performance.now() - started
+			const https = target.protocol === 'https:'
+			const send = https ? httpsRequest : httpRequest
+			const agent = connection === null ? false : https ? connection.https : connection.http
+			const sentAt = performance.now()
+			if (connection === null) started ??= sentAt
+			const req = send(target, { headers, agent, signal: deadline }, res => {
+				const ttfb = performance.now() - (started ?? sentAt)
 				const status = res.statusCode ?? 0
 				const location = res.headers.location
 				res.resume()
@@ -154,6 +152,12 @@ export function timeNewConnection(url: string, headers: Record<string, string>, 
 				})
 			})
 			req.on('error', reject)
+			// A reused socket is ready now; a new one once connected (TLS included), so setup stays out of a warm time.
+			req.on('socket', socket => {
+				if (connection === null || started !== null) return
+				if (!socket.connecting) started = performance.now()
+				else socket.once(https ? 'secureConnect' : 'connect', () => (started ??= performance.now()))
+			})
 			req.end()
 		})
 	return get(new URL(url), 0)
@@ -168,15 +172,19 @@ function logLine(s: ServerSample): string {
 	return parts.join(', ')
 }
 
-// New-connection requests, then warm-up requests (both kept apart for cold starts, never tested), then the measured rounds,
-// one request per side each, in alternating order.
+// A request on one of a side's kept-alive connections, by index.
+export type WarmRequest = (url: string, side: 'base' | 'head', connection: number) => Promise<ServerSample>
+
+// New-connection requests, then one warm-up request per kept-alive connection (both kept apart for cold starts, never
+// tested), then the measured rounds: one request per side each, alternating, rotating over the connections so a side's
+// samples spread over several server machines instead of the one a single connection lands on.
 export async function sampleServer({
 	path,
 	baseUrl,
 	headUrl,
 	samples,
 	newConnections,
-	warmUp,
+	connections,
 	request,
 	newConnection,
 	log,
@@ -186,8 +194,8 @@ export async function sampleServer({
 	headUrl: string
 	samples: number
 	newConnections: number
-	warmUp: number
-	request: ServerRequest
+	connections: number
+	request: WarmRequest
 	newConnection: ServerRequest
 	log: Log
 }): Promise<ServerSamples> {
@@ -197,11 +205,11 @@ export async function sampleServer({
 	] as const
 	const first: NonNullable<ServerSamples['first']> = { base: [], head: [] }
 	const out: ServerSamples = { base: [], head: [], failures: { base: [], head: [] }, first }
-	const phase = async (label: string, rounds: number, send: ServerRequest): Promise<void> => {
+	const phase = async (label: string, rounds: number, send: (url: string, side: 'base' | 'head', i: number) => Promise<ServerSample>): Promise<void> => {
 		const line: string[] = []
 		for (let i = 0; i < rounds; i++) {
 			for (const side of roundOrder(sides, i)) {
-				const sample = await send(side.url).catch((err: unknown) => {
+				const sample = await send(side.url, side.name, i).catch((err: unknown) => {
 					line.push(`${side.label} failed (${firstLine(err)})`)
 					return null
 				})
@@ -211,13 +219,13 @@ export async function sampleServer({
 		}
 		if (line.length > 0) log(`  ${path} server ${label}: ${line.join('; ')}`)
 	}
-	await phase('new connections', newConnections, newConnection)
-	await phase('warm-up', warmUp, request)
+	await phase('new connections', newConnections, url => newConnection(url))
+	await phase('warm-up', connections, request)
 	for (let round = 0; round < samples; round++) {
 		const line: string[] = []
 		for (const side of roundOrder(sides, round)) {
 			try {
-				const sample = await request(side.url)
+				const sample = await request(side.url, side.name, round % connections)
 				out[side.name].push(sample)
 				line.push(`${side.label} ${logLine(sample)}`)
 			} catch (err) {

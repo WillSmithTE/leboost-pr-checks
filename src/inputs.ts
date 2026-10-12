@@ -1,6 +1,6 @@
 // Action inputs, parsed and validated. Every error message names the input so a first setup is easy to fix.
 import { CHART_BASE_URL } from './chart'
-import { DEVICES, type DeviceName } from './config'
+import { DEFAULT_SERVER_SAMPLES, DEVICES, type DeviceName } from './config'
 import type { PageSpec } from './run'
 
 export class InputError extends Error {}
@@ -11,6 +11,8 @@ export interface Inputs {
 	prodUrl: string | null
 	pages: PageSpec[]
 	rounds: number
+	// Server time requests per side and path; 0 turns server time off.
+	serverSamples: number
 	device: DeviceName
 	githubToken: string
 	comment: boolean
@@ -23,6 +25,8 @@ export interface Inputs {
 export type GetInput = (name: string) => string
 
 const MAX_ROUNDS = 50
+const MIN_SERVER_SAMPLES = 10
+const MAX_SERVER_SAMPLES = 200
 
 // Paths never contain spaces, so any mix of newlines, spaces and commas separates them.
 const words = (raw: string): string[] => raw.split(/[\s,]+/).filter(Boolean)
@@ -51,6 +55,15 @@ function bool(name: string, raw: string, fallback: boolean): boolean {
 function int(name: string, raw: string, { min, max }: { min: number; max: number }): number {
 	const n = Number(raw.trim())
 	if (!Number.isInteger(n) || n < min || n > max) throw new InputError(`${name} must be a whole number from ${min} to ${max}, got "${raw}".`)
+	return n
+}
+
+function serverSamples(raw: string): number {
+	const n = Number(raw.trim())
+	if (n === 0) return 0
+	if (!Number.isInteger(n) || n < MIN_SERVER_SAMPLES || n > MAX_SERVER_SAMPLES) {
+		throw new InputError(`server-samples must be 0 (off) or a whole number from ${MIN_SERVER_SAMPLES} to ${MAX_SERVER_SAMPLES}, got "${raw}".`)
+	}
 	return n
 }
 
@@ -105,6 +118,7 @@ export function parseInputs(get: GetInput): Inputs {
 		prodUrl: prodRaw ? url('prod-url', prodRaw) : null,
 		pages: parsePages(input('paths'), get('interact')),
 		rounds: int('rounds', input('rounds', '8'), { min: 3, max: MAX_ROUNDS }),
+		serverSamples: serverSamples(input('server-samples', String(DEFAULT_SERVER_SAMPLES))),
 		device: deviceRaw === 'desktop' ? 'desktop' : 'mobile',
 		githubToken: input('github-token'),
 		comment: bool('comment', input('comment'), true),

@@ -1,7 +1,7 @@
 // Reference renderer for the PR checks trend chart: query string in, SVG out. Spec: docs/chart-spec.md.
 // usero.io rasterises this SVG with resvg-wasm at 2x; nothing here needs a browser or system fonts.
 
-export const METRICS = ['LCP', 'FCP', 'CLS', 'TBT', 'TTFB', 'INP'] as const
+export const METRICS = ['LCP', 'FCP', 'CLS', 'TBT', 'TTFB', 'Server', 'INP'] as const
 export type Metric = (typeof METRICS)[number]
 
 export interface ChartData {
@@ -40,7 +40,7 @@ const PR_X = 462
 const BOTTOM_LABEL_Y = 222
 
 // Narrowest y range per metric, so run-to-run noise draws as a wobble rather than a cliff.
-const MIN_SPAN: Record<Metric, number> = { LCP: 200, FCP: 200, TTFB: 100, TBT: 100, INP: 50, CLS: 0.05 }
+const MIN_SPAN: Record<Metric, number> = { LCP: 200, FCP: 200, TTFB: 100, Server: 100, TBT: 100, INP: 50, CLS: 0.05 }
 
 const isMetric = (m: string | null): m is Metric => METRICS.some(x => x === m)
 const fromUnits = (metric: Metric, u: number): number => (metric === 'CLS' ? u / 1000 : u * 10)

@@ -1,7 +1,9 @@
 // Presets and verdict thresholds. Rationale for each number is in README.md, "Method".
 
-export const METRICS = ['LCP', 'FCP', 'CLS', 'TBT', 'TTFB', 'INP'] as const
+// Server is timed by its own plain requests (src/server.ts), every other metric by the browser page loads.
+export const METRICS = ['LCP', 'FCP', 'CLS', 'TBT', 'TTFB', 'Server', 'INP'] as const
 export type MetricName = (typeof METRICS)[number]
+export const LOAD_METRICS: readonly MetricName[] = METRICS.filter(m => m !== 'Server')
 
 export interface Device {
 	viewport: { width: number; height: number }
@@ -50,16 +52,26 @@ export const FLOORS: Record<MetricName, Floor> = {
 	LCP: { absFloor: 100, relFloor: 0.05 },
 	FCP: { absFloor: 100, relFloor: 0.05 },
 	TTFB: { absFloor: 100, relFloor: 0.25 },
+	Server: { absFloor: 50, relFloor: 0.1 },
 	TBT: { absFloor: 50, relFloor: 0.2 },
 	INP: { absFloor: 25, relFloor: 0.2 },
 	CLS: { absFloor: 0.01, relFloor: 0 },
 }
 
-// Tested on paint time minus TTFB, so a slow preview server shows in TTFB instead of hiding or faking a paint change.
+// Tested on paint time minus TTFB, so server time counts once, in the Server row, instead of hiding or faking a paint change.
 export const FROM_FIRST_BYTE: readonly MetricName[] = ['LCP', 'FCP']
 
-// Shown and tested, but the verdict is always no-change: two previews' server speed varies independently of the code.
+// Kept in vitals.json with a no-change verdict and left out of the comment: a cold page load's first byte mixes
+// connection setup and cold starts into server time. The Server row measures it on warm connections instead.
 export const CONTEXT_ONLY: readonly MetricName[] = ['TTFB']
+
+export const DEFAULT_SERVER_SAMPLES = 30
+// Discarded requests per side and path before the measured ones, to wake cold isolates and open connections.
+export const SERVER_WARM_UP = 3
+export const SERVER_TIMEOUT_MS = 30_000
+// A server time over max(factor x its side's median, median + plusMs) is a cold outlier. Up to maxShare of a side's
+// requests are left out of the test and listed; more than that is how the server behaves, so they all stay in.
+export const COLD = { factor: 3, plusMs: 300, maxShare: 0.1 }
 
 export const DEFAULT_ALPHA = 0.05
 export const DEFAULT_PROD_LOADS = 3

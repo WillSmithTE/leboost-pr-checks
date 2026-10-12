@@ -13,9 +13,10 @@ import {
 import type { History } from '../src/chart'
 import { notMeasuredComment } from '../src/main'
 import type { Load, Metrics } from '../src/run'
+import type { ServerLoad, ServerSamples } from '../src/server'
 import fixture from './fixtures/run.json'
 
-const META: Omit<BuildInput, 'pages'> = { ...fixture.meta, config: { ...fixture.meta.config, device: 'mobile' } }
+const META: Omit<BuildInput, 'pages'> = { ...fixture.meta, config: { ...fixture.meta.config, device: 'mobile', serverRequests: 0 } }
 const FIXTURE_PAGES: PageInput[] = fixture.pages
 const build = (overrides: Partial<BuildInput> = {}): RunResult =>
 	buildResult({ ...META, pages: FIXTURE_PAGES, durationMs: 1000, generatedAt: '2026-10-09T00:00:00Z', ...overrides })
@@ -73,6 +74,33 @@ const DOCS: Centre = { LCP: 2010, FCP: 1700, CLS: 0, TBT: 0, TTFB: 180 }
 const PROD_HOME: Centre = { ...HOME, TBT: 740, TTFB: 130 }
 const PROD_DOCS: Centre = { ...DOCS, TBT: 520, TTFB: 128 }
 
+// 30 server time requests per side around a centre, up to 15 ms apart. Server-Timing total is the first byte minus
+// 20 ms of network; db and queries only when the centre has them. A cold request is 1.5 s slower.
+interface ServerTimeCentre {
+	ms: number
+	total?: boolean
+	db?: number
+	queries?: number
+	cold?: number[]
+}
+const SERVER_REQUESTS = 30
+function serverTimeSide(side: 'base' | 'head', { ms, total = false, db, queries, cold = [] }: ServerTimeCentre): ServerLoad[] {
+	return Array.from({ length: SERVER_REQUESTS }, (_, i) => {
+		const ttfb = ms + (side === 'base' ? ((i * 7) % 11) - 5 : ((i * 5 + 3) % 11) - 5) * 3 + (cold.includes(i) ? 1500 : 0)
+		return { ttfb, total: total ? ttfb - 20 : null, db: db ?? null, queries: queries ?? null }
+	})
+}
+const serverSamples = (base: ServerTimeCentre, head: ServerTimeCentre = base): ServerSamples => ({
+	base: serverTimeSide('base', base),
+	head: serverTimeSide('head', head),
+	failures: { base: [], head: [] },
+})
+// `/` reports database time and queries in Server-Timing, `/docs` sends no Server-Timing.
+const SERVER: Record<string, ServerSamples> = {
+	'/': serverSamples({ ms: 120, db: 12, queries: 3 }),
+	'/docs': serverSamples({ ms: 60 }),
+}
+
 interface ScenarioOptions {
 	home?: Centre
 	docs?: Centre
@@ -80,23 +108,26 @@ interface ScenarioOptions {
 	missing?: Record<string, Partial<Record<keyof Centre, number[]>>>
 	// Every PR load failed, as when the preview 500s.
 	headDown?: boolean
+	server?: Record<string, ServerSamples>
 }
 
-function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDown = false }: ScenarioOptions): RunResult {
+function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDown = false, server = SERVER }: ScenarioOptions): RunResult {
 	const headFailures = headDown ? Array<string>(8).fill('HTTP 500') : []
 	const page = (path: string, base: Centre, head: Centre, prodCentre: Centre): PageInput => {
 		const headLoads: Load[] = headDown ? Array<Load>(8).fill(null) : loads(head, missing[path], HEAD_JITTER)
-		if (!prod) return { path, loads: { base: loads(base), head: headLoads }, failures: { base: [], head: headFailures } }
+		const serverRun = headDown ? { ...server[path], head: Array<ServerLoad>(SERVER_REQUESTS).fill(null), failures: { base: [], head: Array<string>(SERVER_REQUESTS).fill('HTTP 500') } } : server[path]
+		if (!prod) return { path, loads: { base: loads(base), head: headLoads }, failures: { base: [], head: headFailures }, server: serverRun }
 		return {
 			path,
 			loads: { base: loads(base), head: headLoads, prod: loads(prodCentre, {}, PROD_JITTER) },
 			failures: { base: [], head: headFailures, prod: [] },
+			server: serverRun,
 		}
 	}
 	return build({
 		prodUrl: prod ? 'https://shop.example.com' : null,
 		prodLoads: prod ? 3 : null,
-		config: { ...META.config, pairs: 8 },
+		config: { ...META.config, pairs: 8, serverRequests: SERVER_REQUESTS },
 		pages: [page('/', HOME, home, PROD_HOME), page('/docs', DOCS, docs, PROD_DOCS)],
 	})
 }
@@ -122,15 +153,17 @@ function serverSide(side: Side3, { ttfb, lcp, fcp, tbt, cls }: ServerCentre): Me
 	})
 }
 function slowPreviewServer(): RunResult {
+	// Warm requests found both servers equally fast: the cold page loads' first byte gap is not server time.
 	const page = (path: string, sides: Record<Side3, ServerCentre>): PageInput => ({
 		path,
 		loads: { base: serverSide('base', sides.base), head: serverSide('head', sides.head), prod: serverSide('prod', sides.prod) },
 		failures: { base: [], head: [], prod: [] },
+		server: serverSamples({ ms: 150 }),
 	})
 	return build({
 		prodUrl: 'https://shop.example.com',
 		prodLoads: 3,
-		config: { ...META.config, pairs: 8 },
+		config: { ...META.config, pairs: 8, serverRequests: SERVER_REQUESTS },
 		pages: [
 			page('/', {
 				base: { ttfb: 1181, lcp: 3950, fcp: 2210, tbt: 445, cls: 0.002 },
@@ -163,6 +196,13 @@ const SCENARIOS: Record<string, RunResult> = {
 	clean: scenario({}),
 	'slow-preview-server': slowPreviewServer(),
 	'one-regression': scenario({ home: { ...HOME, LCP: 2950 } }),
+	// A slower query: 300 ms more server time on `/`, all of it database, with two cold requests on main.
+	'server-regression': scenario({
+		server: {
+			'/': serverSamples({ ms: 120, total: true, db: 12, queries: 3, cold: [4, 17] }, { ms: 420, total: true, db: 312, queries: 4 }),
+			'/docs': serverSamples({ ms: 60 }),
+		},
+	}),
 	mixed: build(),
 	'missing-prod': scenario({ prod: false, docs: { ...DOCS, TBT: 80 } }),
 	'dropped-metric': scenario({ missing: { '/': { LCP: [0, 2, 3, 4, 5, 7] } } }),
@@ -179,7 +219,7 @@ const prose = (md: string): string =>
 // Plain spaces for readable assertions; the snapshots keep the real non-breaking ones.
 const render = (result: RunResult, options = {}): string => renderComment(result, options).replaceAll(' ', ' ')
 
-const CHARTED = ['clean', 'one-regression', 'mixed'] as const
+const CHARTED = ['clean', 'one-regression', 'mixed', 'server-regression'] as const
 
 // Every comment the action can post, by fixture name: each scenario bare, and with charts where history exists.
 const ALL_COMMENTS: Record<string, string> = {
@@ -240,7 +280,7 @@ describe('renderComment', () => {
 		expect(md).toContain('Nothing on `/` and `/docs` moved past run-to-run noise.')
 		// The LCP floor: 5% of `/`'s 2.2 s after the first byte.
 		expect(md).toContain('With 8 loads per side, smaller shifts can slip through, such as an LCP change under 110 ms.')
-		expect(md).not.toMatch(/server time|server responded/)
+		expect(md).not.toMatch(/server responded|reference and never affects the result\. Each preview/)
 		expect(md).toContain('<details>\n<summary>All metrics</summary>')
 		// Quiet runs stay short: no summary block, no direction words.
 		expect(md).not.toContain('```diff')
@@ -345,41 +385,39 @@ describe('renderComment', () => {
 		const md = render(build({ prodUrl: null, pages: [{ path: '/', loads: { base: side(1500, 3900), head: side(150, 4200) }, failures: {} }] }))
 		// Raw LCP fell 1.05 s, yet the line says slower: it reports the time after the first byte.
 		expect(md).toMatch(/^- LCP {2}\/ {2}300 ms slower \(8%\)$/m)
-		// The cell splits the raw change into the paint change and the server time.
-		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%)<br><sub>minus 1.35 s server time</sub> |')
-		expect(md).toContain("This PR's preview server responded 1.35 s faster than main's on `/`.")
+		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%) |')
 		expect(md).toContain('For LCP and FCP, Change is the time after the first byte')
-		// LCP and FCP regressed; the 1.35 s faster first byte is not counted as an improvement.
+		// LCP and FCP regressed; the 1.35 s faster first byte of the page loads counts nowhere.
 		expect(md).toContain('### Lab web vitals: 2 regressions vs main\n')
-		// Not bold: context only.
-		expect(md).toMatch(/^\| TTFB \| 1\.51 s \| 158 ms \| −1\.35 s \(−90%\) \|$/m)
-		expect(md).toContain('TTFB is for reference and never affects the result.')
+		expect(md).not.toMatch(/\| TTFB \||server responded/)
 	})
 
-	it('splits a raw paint change into paint and server time when the preview servers differ', () => {
+	it('judges server time from warm requests, not from the cold page loads first byte', () => {
 		const md = render(SCENARIOS['slow-preview-server'])
+		// The page loads saw a 314 ms slower first byte on `/`; warm requests found the servers equal.
 		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
-		const server = "This PR's preview server responded 314 ms slower than main's on `/`. That is usually not the code"
-		expect(md.indexOf(server)).toBeGreaterThan(-1)
-		expect(md.indexOf(server)).toBeLessThan(md.indexOf('moved past run-to-run noise'))
-		expect(md).toContain('| LCP | 5.14 s | 5.46 s | +10 ms (0%)<br><sub>plus 314 ms server time</sub> | 4.05 s |')
-		expect(md).toContain('| FCP | 3.40 s | 3.72 s | +10 ms (0%)<br><sub>plus 314 ms server time</sub> | 2.26 s |')
-		expect(md).toContain('| TTFB | 1.19 s | 1.50 s | +314 ms (+26%) | 210 ms |')
-		// `/docs` servers matched, so its rows stay plain.
-		expect(md).toContain('| LCP | 2.77 s | 2.78 s | +5 ms (0%) | 2.69 s |')
+		expect(md).toContain('| LCP | 5.14 s | 5.46 s | +10 ms (0%) | 4.05 s |')
+		expect(md).toContain('| Server | 150 ms | 150 ms | 0 ms | n/a |')
+		expect(md).not.toMatch(/\| TTFB \||server responded|usually not the code/)
 	})
 
-	it('leaves the server note out while the TTFB gap is under the LCP floor, and names each page past it', () => {
-		const load = (ttfb: number, i: number): Metrics => ({ TTFB: ttfb + i, LCP: ttfb + 4000 + i, FCP: ttfb + 2000 + i, CLS: 0, TBT: 0 })
-		const side = (ttfb: number): Metrics[] => [0, 4, 1, 3, 2].map(i => load(ttfb, i))
-		const page = (path: string, base: number, head: number): PageInput => ({ path, loads: { base: side(base), head: side(head) }, failures: {} })
-		// LCP floor is 5% of 4 s after the first byte, 200 ms: a 190 ms gap stays quiet, 210 ms does not.
-		const quietRun = render(build({ prodUrl: null, pages: [page('/', 1000, 1190)] }))
-		expect(quietRun).not.toMatch(/server time|server responded/)
-		const md = render(build({ prodUrl: null, pages: [page('/', 1000, 1210), page('/docs', 1500, 300)] }))
-		expect(md).toContain("This PR's preview server responded 210 ms slower than main's on `/` and 1.20 s faster on `/docs`.")
-		expect(md).toContain('<sub>plus 210 ms server time</sub>')
-		expect(md).toContain('<sub>minus 1.20 s server time</sub>')
+	it('flags a server regression once, in the Server row, with database time and cold requests', () => {
+		const result = SCENARIOS['server-regression']
+		const server = result.pages[0].metrics.Server
+		expect(server?.summary.verdict).toBe('regressed')
+		expect(server?.server).toMatchObject({
+			source: 'server-timing',
+			db: { baseMedian: 12, headMedian: 312 },
+			queries: { baseMedian: 3, headMedian: 4 },
+			cold: { base: [1603, 1612], head: [] },
+		})
+		// The two cold requests are left out of the test and the medians.
+		expect(server?.base).toHaveLength(28)
+		const md = render(result)
+		expect(md).toContain('### Lab web vitals: 1 regression vs main\n\n```diff\n- Server  /  300 ms slower (300%)\n```\n')
+		expect(md).toMatch(/^\| Server \| 100 ms \| 400 ms \| \*\*Slower\*\* \+300 ms \(\+300%\)<br><sub>db 12 ms to 312 ms, 3 to 4 queries, 2 cold requests left out<\/sub> \| n\/a \|$/m)
+		expect(md).toContain('Server time from 30 warm requests per side, unthrottled.')
+		expect(countVerdicts(result)).toEqual({ regressions: 1, improvements: 0 })
 	})
 
 	it('keeps TTFB with its samples and test but a no-change verdict, for prod too', () => {

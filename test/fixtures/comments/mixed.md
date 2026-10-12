@@ -24,7 +24,6 @@
 | CLS | 0.002 | 0.081 | **Worse** +0.079 | n/a |
 | FCP | 2.39 s | 2.39 s | −3 ms (0%) | n/a |
 | TBT | 43 ms | 42 ms | −1 ms (−2%) | n/a |
-| TTFB | 200 ms | 199 ms | −1 ms (0%) | n/a |
 
 **`/docs`**
 
@@ -34,11 +33,8 @@
 | FCP | 2.01 s | 1.71 s | **Faster** −302 ms (−16%) | 1.40 s |
 | CLS | 0.000 | 0.000 | 0.000 | 0.000 |
 | TBT | 22 ms | 24 ms | +2 ms (+9%) | 21 ms |
-| TTFB | 178 ms | 180 ms | +2 ms (+1%) | 61 ms |
 
 For LCP and FCP, Change is the time after the first byte, so server speed can neither hide nor fake a change. main and this PR show the full medians.
-
-TTFB is for reference and never affects the result. Each preview's server speed varies on its own, so a gap there is usually not this PR.
 
 prod is for reference and never affects the result. It can load third-party tags, data and caches the previews do not, so a gap there is usually not this PR.
 

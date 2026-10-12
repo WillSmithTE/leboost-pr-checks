@@ -1,7 +1,8 @@
 // Turns raw samples into the result document and the PR comment.
-import { CONTEXT_ONLY, type DeviceName, FLOORS, type Floor, FROM_FIRST_BYTE, METRICS, type MetricName } from './config'
+import { COLD, CONTEXT_ONLY, type DeviceName, FLOORS, type Floor, FROM_FIRST_BYTE, LOAD_METRICS, METRICS, type MetricName } from './config'
 import type { Load, PageSamples, SideName } from './run'
 import { chartImage, type History } from './chart'
+import type { ServerLoad, ServerSample, ServerSamples } from './server'
 import { compareSamples, type Comparison, median, type Verdict } from './stats'
 
 const MIN_SAMPLES = 3
@@ -26,11 +27,28 @@ export interface MetricSummary extends Comparison {
 	vsProd?: VsProd | null
 }
 
+export interface MedianPair {
+	baseMedian: number | null
+	headMedian: number | null
+}
+
+export interface ServerDetail {
+	// What was tested: Server-Timing's total when every good request on both sides carried one, else the first byte.
+	source: 'server-timing' | 'ttfb'
+	db: MedianPair | null
+	queries: MedianPair | null
+	// Cold outliers left out of the test (see COLD in config.ts).
+	cold: { base: number[]; head: number[] }
+	requests: { base: ServerLoad[]; head: ServerLoad[] }
+}
+
 export interface MetricResult {
+	// For Server, the tested values without cold outliers.
 	base: number[]
 	head: number[]
 	prod?: number[]
 	summary: MetricSummary
+	server?: ServerDetail
 }
 
 export interface Dropped {
@@ -44,10 +62,14 @@ export interface PageResult {
 	metrics: Partial<Record<MetricName, MetricResult>>
 	dropped: Dropped[]
 	failures: PageSamples['failures']
+	// Failed server time requests per side; null when server time was not measured.
+	serverFailures: ServerSamples['failures'] | null
 }
 
 export interface RunConfig {
 	pairs: number
+	// Server time requests per side and page, 0 when turned off.
+	serverRequests: number
 	device: DeviceName
 	latencyMs: number
 	downloadKbps: number
@@ -83,6 +105,7 @@ export interface PageInput {
 	path: string
 	loads: PageSamples['samples']
 	failures: PageSamples['failures']
+	server?: ServerSamples | null
 }
 
 type Values = (number | null | undefined)[]
@@ -119,10 +142,10 @@ export function summarisePage(
 	samples: PageSamples['samples'],
 	alpha: number,
 	{ floors = FLOORS, firstByte = FROM_FIRST_BYTE, contextOnly = CONTEXT_ONLY }: SummariseOptions = {},
-): Omit<PageResult, 'failures'> {
+): Omit<PageResult, 'failures' | 'serverFailures'> {
 	const metrics: PageResult['metrics'] = {}
 	const dropped: Dropped[] = []
-	for (const metric of METRICS) {
+	for (const metric of LOAD_METRICS) {
 		const base = column(samples.base, metric)
 		const head = column(samples.head, metric)
 		if (base.length < MIN_SAMPLES || head.length < MIN_SAMPLES) {
@@ -184,6 +207,50 @@ function summarise(test: Comparison, base: number[], head: number[], shifted: bo
 	}
 }
 
+// The cut-off above which a side's server times are cold outliers, or null when none are left out.
+export function coldLimit(values: readonly number[], { factor, plusMs, maxShare } = COLD): number | null {
+	const m = median(values)
+	if (m === null) return null
+	const limit = Math.max(factor * m, m + plusMs)
+	const over = values.filter(v => v > limit).length
+	return over > 0 && over <= Math.floor(maxShare * values.length) ? limit : null
+}
+
+function medianPair(base: readonly ServerSample[], head: readonly ServerSample[], key: 'db' | 'queries'): MedianPair | null {
+	const pair = { baseMedian: median(base.map(s => s[key])), headMedian: median(head.map(s => s[key])) }
+	if (pair.baseMedian === null && pair.headMedian === null) return null
+	return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) }
+}
+
+// The Server metric from the server time requests, or null when either side has fewer than 3 good ones.
+export function summariseServer(samples: ServerSamples, alpha: number, floor: Floor = FLOORS.Server): MetricResult | null {
+	const good = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
+	const base = good(samples.base)
+	const head = good(samples.head)
+	if (base.length < MIN_SAMPLES || head.length < MIN_SAMPLES) return null
+	// One test never mixes Server-Timing totals with first bytes.
+	const source = [...base, ...head].every(s => s.total !== null) ? 'server-timing' : 'ttfb'
+	const split = (side: readonly ServerSample[]): { kept: number[]; cold: number[] } => {
+		const values = side.map(s => (source === 'server-timing' && s.total !== null ? s.total : s.ttfb))
+		const limit = coldLimit(values)
+		return limit === null ? { kept: values, cold: [] } : { kept: values.filter(v => v <= limit), cold: values.filter(v => v > limit) }
+	}
+	const b = split(base)
+	const h = split(head)
+	return {
+		base: b.kept,
+		head: h.kept,
+		summary: summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false),
+		server: {
+			source,
+			db: medianPair(base, head, 'db'),
+			queries: medianPair(base, head, 'queries'),
+			cold: { base: b.cold, head: h.cold },
+			requests: { base: samples.base, head: samples.head },
+		},
+	}
+}
+
 export interface BuildInput extends RunMeta {
 	pages: PageInput[]
 	alpha: number
@@ -212,7 +279,12 @@ export function buildResult({
 		prodUrl: meta.prodUrl,
 		ciRunUrl: meta.ciRunUrl,
 		config: meta.config,
-		pages: pages.map(p => ({ ...summarisePage(p.path, p.loads, alpha), failures: p.failures })),
+		pages: pages.map(p => {
+			const page = summarisePage(p.path, p.loads, alpha)
+			const server = p.server ? summariseServer(p.server, alpha) : null
+			if (server) page.metrics.Server = server
+			return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null }
+		}),
 		meta: { alpha, prodLoads, durationMs, generatedAt },
 	}
 }
@@ -361,6 +433,7 @@ function gapLines(result: RunResult): string[] {
 			const why = short.length > 0 ? listJoin(short.map(failed)) : `no metric was reported by ${MIN_SAMPLES} loads on both sides`
 			lines.push(`- ${code(page.path)} was not compared: ${why}.`)
 			for (const f of failures.filter(f => !short.includes(f))) lines.push(`- ${code(page.path)}: ${failed(f)}.`)
+			lines.push(...serverGapLines(page, result.config.serverRequests))
 			continue
 		}
 		for (const f of failures) lines.push(`- ${code(page.path)}: ${failed(f)}.`)
@@ -370,53 +443,52 @@ function gapLines(result: RunResult): string[] {
 				.map(side => `${d[side]} of ${loads} loads on ${SIDE_LABEL[side]}`)
 			lines.push(`- ${d.metric} on ${code(page.path)} was left out: only ${listJoin(short)} reported it, ${MIN_SAMPLES} needed.`)
 		}
+		lines.push(...serverGapLines(page, result.config.serverRequests))
 	}
 	return lines
 }
 
-// The PR preview's TTFB minus main's, when it moved raw LCP (else FCP) past that metric's floor; null otherwise.
-function serverGap(page: PageResult): number | null {
-	const ttfb = page.metrics.TTFB?.summary
-	const paint = FROM_FIRST_BYTE.map(k => page.metrics[k]?.summary).find(s => s?.fromFirstByte)
-	if (!ttfb || !paint) return null
-	const gap = ttfb.headMedian - ttfb.baseMedian
-	return Math.abs(gap) >= paint.floor ? gap : null
+function serverGapLines(page: PageResult, requests: number): string[] {
+	const failures = page.serverFailures
+	if (!failures) return []
+	const sides = (['base', 'head'] as const).filter(side => failures[side].length > 0)
+	const failed = (side: 'base' | 'head'): string =>
+		`${SIDE_LABEL[side]} failed ${failures[side].length} of ${requests} requests (${[...new Set(failures[side])].join('; ')})`
+	if (!page.metrics.Server) {
+		const why = sides.length > 0 ? listJoin(sides.map(failed)) : `fewer than ${MIN_SAMPLES} requests succeeded`
+		return [`- Server time on ${code(page.path)} was not compared: ${why}.`]
+	}
+	return sides.map(side => `- ${code(page.path)}: server time: ${failed(side)}.`)
 }
 
-// Under a paint Change, the server time that makes up the rest of the gap between the raw medians.
-// Breaks only between "plus 314 ms" and "server time" in a narrow cell.
-const serverTime = (gap: number): string =>
-	`<br><sub>${gap > 0 ? 'plus' : 'minus'}${NBSP}${formatValue('TTFB', Math.abs(gap))} server${NBSP}time</sub>`
+const queryCount = (v: number | null): string => (v === null ? 'n/a' : String(Math.round(v * 10) / 10))
+
+// Under the Server Change: database time and queries from Server-Timing, and cold requests left out of the test.
+function serverDetail(d: ServerDetail): string {
+	const parts: string[] = []
+	if (d.db) parts.push(`db ${formatValue('Server', d.db.baseMedian)} to ${formatValue('Server', d.db.headMedian)}`)
+	if (d.queries) parts.push(`${queryCount(d.queries.baseMedian)} to ${queryCount(d.queries.headMedian)} queries`)
+	const cold = d.cold.base.length + d.cold.head.length
+	if (cold > 0) parts.push(`${plural(cold, 'cold request')} left out`)
+	return parts.length > 0 ? `<br><sub>${parts.join(', ')}</sub>` : ''
+}
 
 // Five columns at most so it fits GitHub mobile; only significant rows get a word, in bold.
 function pageTable(page: PageResult, hasProd: boolean): string[] {
 	const header = ['Metric', 'main', `this${NBSP}PR`, 'Change']
 	if (hasProd) header.push('prod')
-	const gap = serverGap(page)
-	const rows = sortedMetrics(page).map(([metric, m]) => {
-		const s = m.summary
-		const { change } = tested(metric, s)
-		const hint = gap !== null && s.fromFirstByte ? serverTime(gap) : ''
-		const word = s.verdict === 'no-change' ? '' : `**${capitalise(directionWord(metric, s.verdict))}** `
-		const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${hint}`]
-		if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian))
-		return `| ${cells.join(' | ')} |`
-	})
+	const rows = sortedMetrics(page)
+		.filter(([metric]) => !CONTEXT_ONLY.includes(metric))
+		.map(([metric, m]) => {
+			const s = m.summary
+			const { change } = tested(metric, s)
+			const detail = m.server ? serverDetail(m.server) : ''
+			const word = s.verdict === 'no-change' ? '' : `**${capitalise(directionWord(metric, s.verdict))}** `
+			const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${detail}`]
+			if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian))
+			return `| ${cells.join(' | ')} |`
+		})
 	return [`**${code(page.path)}**`, '', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows]
-}
-
-// One line under the headline when a preview server gap moved the raw paint medians, so the table needs no decoding.
-function serverLine(pages: readonly PageResult[]): string | null {
-	const gaps = pages.flatMap(page => {
-		const gap = serverGap(page)
-		return gap === null ? [] : [[page, gap] as const]
-	})
-	if (gaps.length === 0) return null
-	const parts = gaps.map(
-		([page, gap], i) =>
-			`${formatValue('TTFB', Math.abs(gap))} ${gap > 0 ? 'slower' : 'faster'}${i === 0 ? " than main's" : ''} on ${code(page.path)}`,
-	)
-	return `This PR's preview server responded ${listJoin(parts)}. That is usually not the code, so it is left out of the result.`
 }
 
 export interface CommentOptions {
@@ -436,7 +508,7 @@ function charts(pages: readonly PageResult[], flags: readonly Flag[], history: H
 	for (const f of flags) if (!picks.some(([page]) => page === f.page)) picks.push([f.page, f.metric])
 	if (flags.length === 0 && pages.length > 0) {
 		const first = pages[0]
-		const metric = first.metrics.LCP ? 'LCP' : metricEntries(first)[0]?.[0]
+		const metric = first.metrics.LCP ? 'LCP' : metricEntries(first).find(([m]) => !CONTEXT_ONLY.includes(m))?.[0]
 		if (metric) picks.push([first, metric])
 	}
 	return picks.slice(0, MAX_CHARTS).flatMap(([page, metric]) => {
@@ -459,9 +531,6 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 
 	// A quiet run stays short: no summary block, and its chart waits inside the table fold.
 	if (flags.length > 0) lines.push(...diffBlock(flags), '', ...chartLines)
-
-	const server = serverLine(pages)
-	if (server) lines.push(server, '')
 
 	// "No change" is not "proven fine": say what a run this size can miss, next to the claim.
 	if (pages.length > 0 && regressed.length === 0) {
@@ -491,13 +560,6 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 				'',
 			)
 		}
-		const context = CONTEXT_ONLY.filter(k => pages.some(p => p.metrics[k]))
-		if (context.length > 0) {
-			lines.push(
-				`${listJoin(context)} ${context.length === 1 ? 'is for reference and never affects' : 'are for reference and never affect'} the result. Each preview's server speed varies on its own, so a gap there is usually not this PR.`,
-				'',
-			)
-		}
 		if (hasProd) {
 			lines.push(
 				'prod is for reference and never affects the result. It can load third-party tags, data and caches the previews do not, so a gap there is usually not this PR.',
@@ -513,8 +575,11 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 	const footer = [
 		failOnRegression ? 'Fails the job on a regression.' : 'Report only, never fails the build.',
 		`Medians of ${config.pairs} cold ${config.device} loads per side${prodNote}, interleaved, at ${net}.`,
-		`A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`,
 	]
+	if (config.serverRequests > 0) footer.push(`Server time from ${config.serverRequests} warm requests per side, unthrottled.`)
+	footer.push(
+		`A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`,
+	)
 	if (result.ciRunUrl) footer.push(`[CI run](${result.ciRunUrl})${sha ? ` for ${sha}` : ''}.`)
 	else if (sha) footer.push(`Head ${sha}.`)
 	footer.push(`By [Usero PR checks](${ACTION_URL}).`)

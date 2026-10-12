@@ -13,6 +13,7 @@ describe('parseInputs', () => {
 			prodUrl: null,
 			pages: [{ path: '/', interaction: null }],
 			rounds: 8,
+			serverSamples: 30,
 			device: 'mobile',
 			githubToken: '',
 			comment: true,
@@ -49,12 +50,19 @@ describe('parseInputs', () => {
 		expect(inputs.rounds).toBe(10)
 	})
 
+	it('takes a server time request count, and 0 to turn it off', () => {
+		expect(parse({ ...minimal, 'server-samples': '60' }).serverSamples).toBe(60)
+		expect(parse({ ...minimal, 'server-samples': '0' }).serverSamples).toBe(0)
+	})
+
 	it('names the input in every setup mistake', () => {
 		const cases: [Record<string, string>, RegExp][] = [
 			[{ 'base-url': 'https://main.app.test' }, /head-url is required/],
 			[{ 'head-url': 'https://pr.app.test' }, /base-url is required/],
 			[{ ...minimal, 'head-url': 'pr-7.app.test' }, /head-url must be an http\(s\) URL/],
 			[{ ...minimal, rounds: '2' }, /rounds must be a whole number from 3 to 50/],
+			[{ ...minimal, 'server-samples': '5' }, /server-samples must be 0 \(off\) or a whole number from 10 to 200/],
+			[{ ...minimal, 'server-samples': 'lots' }, /server-samples must be 0/],
 			[{ ...minimal, device: 'tablet' }, /device must be mobile or desktop/],
 			[{ ...minimal, paths: 'docs' }, /paths must start with \//],
 			[{ ...minimal, paths: '/ /' }, /paths lists the same path twice/],

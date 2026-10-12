@@ -27050,7 +27050,7 @@ var require_async = __commonJS({
       } else {
         _defer = fallback;
       }
-      var nextTick = wrap(_defer);
+      var nextTick2 = wrap(_defer);
       var _parallel = awaitify((eachfn, tasks, callback) => {
         var results = isArrayLike(tasks) ? [] : {};
         eachfn(tasks, (task, key, taskCb) => {
@@ -27527,7 +27527,7 @@ var require_async = __commonJS({
         mapValuesLimit: mapValuesLimit$1,
         mapValuesSeries,
         memoize,
-        nextTick,
+        nextTick: nextTick2,
         parallel,
         parallelLimit,
         priorityQueue,
@@ -27656,7 +27656,7 @@ var require_async = __commonJS({
       exports3.mapValuesLimit = mapValuesLimit$1;
       exports3.mapValuesSeries = mapValuesSeries;
       exports3.memoize = memoize;
-      exports3.nextTick = nextTick;
+      exports3.nextTick = nextTick2;
       exports3.parallel = parallel;
       exports3.parallelLimit = parallelLimit;
       exports3.priorityQueue = priorityQueue;
@@ -28492,11 +28492,11 @@ var require_process_nextick_args = __commonJS({
   "node_modules/process-nextick-args/index.js"(exports2, module) {
     "use strict";
     if (typeof process === "undefined" || !process.version || process.version.indexOf("v0.") === 0 || process.version.indexOf("v1.") === 0 && process.version.indexOf("v1.8.") !== 0) {
-      module.exports = { nextTick };
+      module.exports = { nextTick: nextTick2 };
     } else {
       module.exports = process;
     }
-    function nextTick(fn, arg1, arg2, arg3) {
+    function nextTick2(fn, arg1, arg2, arg3) {
       if (typeof fn !== "function") {
         throw new TypeError('"callback" argument must be a function');
       }
@@ -61691,7 +61691,8 @@ function findChrome({ env, isExecutable = executable }) {
 }
 
 // src/config.ts
-var METRICS = ["LCP", "FCP", "CLS", "TBT", "TTFB", "INP"];
+var METRICS = ["LCP", "FCP", "CLS", "TBT", "TTFB", "Server", "INP"];
+var LOAD_METRICS = METRICS.filter((m) => m !== "Server");
 var DEVICES = {
   mobile: {
     viewport: { width: 412, height: 823 },
@@ -61716,12 +61717,17 @@ var FLOORS = {
   LCP: { absFloor: 100, relFloor: 0.05 },
   FCP: { absFloor: 100, relFloor: 0.05 },
   TTFB: { absFloor: 100, relFloor: 0.25 },
+  Server: { absFloor: 50, relFloor: 0.1 },
   TBT: { absFloor: 50, relFloor: 0.2 },
   INP: { absFloor: 25, relFloor: 0.2 },
   CLS: { absFloor: 0.01, relFloor: 0 }
 };
 var FROM_FIRST_BYTE = ["LCP", "FCP"];
 var CONTEXT_ONLY = ["TTFB"];
+var DEFAULT_SERVER_SAMPLES = 30;
+var SERVER_WARM_UP = 3;
+var SERVER_TIMEOUT_MS = 3e4;
+var COLD = { factor: 3, plusMs: 300, maxShare: 0.1 };
 var DEFAULT_ALPHA = 0.05;
 var DEFAULT_PROD_LOADS = 3;
 var SETTLE_MS = 500;
@@ -62081,6 +62087,8 @@ function chartImage(input) {
 var InputError = class extends Error {
 };
 var MAX_ROUNDS = 50;
+var MIN_SERVER_SAMPLES = 10;
+var MAX_SERVER_SAMPLES = 200;
 var words = (raw) => raw.split(/[\s,]+/).filter(Boolean);
 var lines = (raw) => raw.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
 function url(name, raw) {
@@ -62101,6 +62109,14 @@ function bool(name, raw, fallback) {
 function int(name, raw, { min, max }) {
   const n = Number(raw.trim());
   if (!Number.isInteger(n) || n < min || n > max) throw new InputError(`${name} must be a whole number from ${min} to ${max}, got "${raw}".`);
+  return n;
+}
+function serverSamples(raw) {
+  const n = Number(raw.trim());
+  if (n === 0) return 0;
+  if (!Number.isInteger(n) || n < MIN_SERVER_SAMPLES || n > MAX_SERVER_SAMPLES) {
+    throw new InputError(`server-samples must be 0 (off) or a whole number from ${MIN_SERVER_SAMPLES} to ${MAX_SERVER_SAMPLES}, got "${raw}".`);
+  }
   return n;
 }
 function parseHeaders(raw) {
@@ -62151,6 +62167,7 @@ function parseInputs(get) {
     prodUrl: prodRaw ? url("prod-url", prodRaw) : null,
     pages: parsePages(input("paths"), get("interact")),
     rounds: int("rounds", input("rounds", "8"), { min: 3, max: MAX_ROUNDS }),
+    serverSamples: serverSamples(input("server-samples", String(DEFAULT_SERVER_SAMPLES))),
     device: deviceRaw === "desktop" ? "desktop" : "mobile",
     githubToken: input("github-token"),
     comment: bool("comment", input("comment"), true),
@@ -62336,7 +62353,7 @@ var tidyPct = (v) => v === null ? null : tidy(v);
 function summarisePage(path4, samples, alpha, { floors = FLOORS, firstByte = FROM_FIRST_BYTE, contextOnly = CONTEXT_ONLY } = {}) {
   const metrics = {};
   const dropped = [];
-  for (const metric of METRICS) {
+  for (const metric of LOAD_METRICS) {
     const base = column(samples.base, metric);
     const head = column(samples.head, metric);
     if (base.length < MIN_SAMPLES || head.length < MIN_SAMPLES) {
@@ -62390,6 +62407,44 @@ function summarise(test, base, head, shifted, context5) {
     fromFirstByte: shifted ? { baseMedian: tidy(test.baseMedian), headMedian: tidy(test.headMedian), deltaPct: tidyPct(test.deltaPct) } : null
   };
 }
+function coldLimit(values2, { factor, plusMs, maxShare } = COLD) {
+  const m = median(values2);
+  if (m === null) return null;
+  const limit = Math.max(factor * m, m + plusMs);
+  const over = values2.filter((v) => v > limit).length;
+  return over > 0 && over <= Math.floor(maxShare * values2.length) ? limit : null;
+}
+function medianPair(base, head, key) {
+  const pair = { baseMedian: median(base.map((s) => s[key])), headMedian: median(head.map((s) => s[key])) };
+  if (pair.baseMedian === null && pair.headMedian === null) return null;
+  return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) };
+}
+function summariseServer(samples, alpha, floor = FLOORS.Server) {
+  const good = (side) => side.filter((s) => s !== null);
+  const base = good(samples.base);
+  const head = good(samples.head);
+  if (base.length < MIN_SAMPLES || head.length < MIN_SAMPLES) return null;
+  const source = [...base, ...head].every((s) => s.total !== null) ? "server-timing" : "ttfb";
+  const split = (side) => {
+    const values2 = side.map((s) => source === "server-timing" && s.total !== null ? s.total : s.ttfb);
+    const limit = coldLimit(values2);
+    return limit === null ? { kept: values2, cold: [] } : { kept: values2.filter((v) => v <= limit), cold: values2.filter((v) => v > limit) };
+  };
+  const b = split(base);
+  const h = split(head);
+  return {
+    base: b.kept,
+    head: h.kept,
+    summary: summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false),
+    server: {
+      source,
+      db: medianPair(base, head, "db"),
+      queries: medianPair(base, head, "queries"),
+      cold: { base: b.cold, head: h.cold },
+      requests: { base: samples.base, head: samples.head }
+    }
+  };
+}
 function buildResult({
   pages,
   alpha,
@@ -62410,7 +62465,12 @@ function buildResult({
     prodUrl: meta.prodUrl,
     ciRunUrl: meta.ciRunUrl,
     config: meta.config,
-    pages: pages.map((p) => ({ ...summarisePage(p.path, p.loads, alpha), failures: p.failures })),
+    pages: pages.map((p) => {
+      const page = summarisePage(p.path, p.loads, alpha);
+      const server = p.server ? summariseServer(p.server, alpha) : null;
+      if (server) page.metrics.Server = server;
+      return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null };
+    }),
     meta: { alpha, prodLoads, durationMs, generatedAt }
   };
 }
@@ -62515,6 +62575,7 @@ function gapLines(result) {
       const why = short.length > 0 ? listJoin(short.map(failed)) : `no metric was reported by ${MIN_SAMPLES} loads on both sides`;
       lines2.push(`- ${code(page.path)} was not compared: ${why}.`);
       for (const f of failures.filter((f2) => !short.includes(f2))) lines2.push(`- ${code(page.path)}: ${failed(f)}.`);
+      lines2.push(...serverGapLines(page, result.config.serverRequests));
       continue;
     }
     for (const f of failures) lines2.push(`- ${code(page.path)}: ${failed(f)}.`);
@@ -62522,42 +62583,43 @@ function gapLines(result) {
       const short = ["base", "head"].filter((side) => d[side] < MIN_SAMPLES).map((side) => `${d[side]} of ${loads} loads on ${SIDE_LABEL[side]}`);
       lines2.push(`- ${d.metric} on ${code(page.path)} was left out: only ${listJoin(short)} reported it, ${MIN_SAMPLES} needed.`);
     }
+    lines2.push(...serverGapLines(page, result.config.serverRequests));
   }
   return lines2;
 }
-function serverGap(page) {
-  const ttfb = page.metrics.TTFB?.summary;
-  const paint = FROM_FIRST_BYTE.map((k) => page.metrics[k]?.summary).find((s) => s?.fromFirstByte);
-  if (!ttfb || !paint) return null;
-  const gap = ttfb.headMedian - ttfb.baseMedian;
-  return Math.abs(gap) >= paint.floor ? gap : null;
+function serverGapLines(page, requests) {
+  const failures = page.serverFailures;
+  if (!failures) return [];
+  const sides = ["base", "head"].filter((side) => failures[side].length > 0);
+  const failed = (side) => `${SIDE_LABEL[side]} failed ${failures[side].length} of ${requests} requests (${[...new Set(failures[side])].join("; ")})`;
+  if (!page.metrics.Server) {
+    const why = sides.length > 0 ? listJoin(sides.map(failed)) : `fewer than ${MIN_SAMPLES} requests succeeded`;
+    return [`- Server time on ${code(page.path)} was not compared: ${why}.`];
+  }
+  return sides.map((side) => `- ${code(page.path)}: server time: ${failed(side)}.`);
 }
-var serverTime = (gap) => `<br><sub>${gap > 0 ? "plus" : "minus"}${NBSP}${formatValue("TTFB", Math.abs(gap))} server${NBSP}time</sub>`;
+var queryCount = (v) => v === null ? "n/a" : String(Math.round(v * 10) / 10);
+function serverDetail(d) {
+  const parts = [];
+  if (d.db) parts.push(`db ${formatValue("Server", d.db.baseMedian)} to ${formatValue("Server", d.db.headMedian)}`);
+  if (d.queries) parts.push(`${queryCount(d.queries.baseMedian)} to ${queryCount(d.queries.headMedian)} queries`);
+  const cold = d.cold.base.length + d.cold.head.length;
+  if (cold > 0) parts.push(`${plural(cold, "cold request")} left out`);
+  return parts.length > 0 ? `<br><sub>${parts.join(", ")}</sub>` : "";
+}
 function pageTable(page, hasProd) {
   const header = ["Metric", "main", `this${NBSP}PR`, "Change"];
   if (hasProd) header.push("prod");
-  const gap = serverGap(page);
-  const rows = sortedMetrics(page).map(([metric, m]) => {
+  const rows = sortedMetrics(page).filter(([metric]) => !CONTEXT_ONLY.includes(metric)).map(([metric, m]) => {
     const s = m.summary;
     const { change } = tested(metric, s);
-    const hint = gap !== null && s.fromFirstByte ? serverTime(gap) : "";
+    const detail = m.server ? serverDetail(m.server) : "";
     const word = s.verdict === "no-change" ? "" : `**${capitalise(directionWord(metric, s.verdict))}** `;
-    const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${hint}`];
+    const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${detail}`];
     if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian));
     return `| ${cells.join(" | ")} |`;
   });
   return [`**${code(page.path)}**`, "", `| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`, ...rows];
-}
-function serverLine(pages) {
-  const gaps = pages.flatMap((page) => {
-    const gap = serverGap(page);
-    return gap === null ? [] : [[page, gap]];
-  });
-  if (gaps.length === 0) return null;
-  const parts = gaps.map(
-    ([page, gap], i) => `${formatValue("TTFB", Math.abs(gap))} ${gap > 0 ? "slower" : "faster"}${i === 0 ? " than main's" : ""} on ${code(page.path)}`
-  );
-  return `This PR's preview server responded ${listJoin(parts)}. That is usually not the code, so it is left out of the result.`;
 }
 var MAX_CHARTS = 3;
 function charts(pages, flags, history, baseUrl2) {
@@ -62566,7 +62628,7 @@ function charts(pages, flags, history, baseUrl2) {
   for (const f of flags) if (!picks.some(([page]) => page === f.page)) picks.push([f.page, f.metric]);
   if (flags.length === 0 && pages.length > 0) {
     const first = pages[0];
-    const metric = first.metrics.LCP ? "LCP" : metricEntries(first)[0]?.[0];
+    const metric = first.metrics.LCP ? "LCP" : metricEntries(first).find(([m]) => !CONTEXT_ONLY.includes(m))?.[0];
     if (metric) picks.push([first, metric]);
   }
   return picks.slice(0, MAX_CHARTS).flatMap(([page, metric]) => {
@@ -62586,8 +62648,6 @@ function renderComment(result, { failOnRegression = false, history, chartBaseUrl
   const chartLines = charts(pages, flags, history, chartBaseUrl);
   const lines2 = [`### ${commentTitle(result)}`, ""];
   if (flags.length > 0) lines2.push(...diffBlock(flags), "", ...chartLines);
-  const server = serverLine(pages);
-  if (server) lines2.push(server, "");
   if (pages.length > 0 && regressed.length === 0) {
     const lead = improved.length > 0 ? "No regressions." : `Nothing on ${listJoin(pages.map((p) => code(p.path)))} moved past run-to-run noise.`;
     const lcpFloors = pages.flatMap((p) => {
@@ -62610,13 +62670,6 @@ function renderComment(result, { failOnRegression = false, history, chartBaseUrl
         ""
       );
     }
-    const context5 = CONTEXT_ONLY.filter((k) => pages.some((p) => p.metrics[k]));
-    if (context5.length > 0) {
-      lines2.push(
-        `${listJoin(context5)} ${context5.length === 1 ? "is for reference and never affects" : "are for reference and never affect"} the result. Each preview's server speed varies on its own, so a gap there is usually not this PR.`,
-        ""
-      );
-    }
     if (hasProd) {
       lines2.push(
         "prod is for reference and never affects the result. It can load third-party tags, data and caches the previews do not, so a gap there is usually not this PR.",
@@ -62630,9 +62683,12 @@ function renderComment(result, { failOnRegression = false, history, chartBaseUrl
   const prodNote = hasProd && meta.prodLoads !== null && meta.prodLoads !== config.pairs ? ` (${meta.prodLoads} on prod)` : "";
   const footer = [
     failOnRegression ? "Fails the job on a regression." : "Report only, never fails the build.",
-    `Medians of ${config.pairs} cold ${config.device} loads per side${prodNote}, interleaved, at ${net}.`,
-    `A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`
+    `Medians of ${config.pairs} cold ${config.device} loads per side${prodNote}, interleaved, at ${net}.`
   ];
+  if (config.serverRequests > 0) footer.push(`Server time from ${config.serverRequests} warm requests per side, unthrottled.`);
+  footer.push(
+    `A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`
+  );
   if (result.ciRunUrl) footer.push(`[CI run](${result.ciRunUrl})${sha ? ` for ${sha}` : ""}.`);
   else if (sha) footer.push(`Head ${sha}.`);
   footer.push(`By [Usero PR checks](${ACTION_URL}).`);
@@ -106037,7 +106093,146 @@ async function measureLoad(browser, url3, { device, interaction, settleMs, idleT
   }
 }
 
+// src/server.ts
+function splitOutside(value, separator) {
+  const parts = [];
+  let current = "";
+  let quoted = false;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "\\" && quoted && i + 1 < value.length) {
+      current += ch + value[++i];
+      continue;
+    }
+    if (ch === '"') quoted = !quoted;
+    if (ch === separator && !quoted) {
+      parts.push(current);
+      current = "";
+    } else current += ch;
+  }
+  parts.push(current);
+  return parts.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+var unquote = (v) => v.length >= 2 && v.startsWith('"') && v.endsWith('"') ? v.slice(1, -1).replace(/\\(.)/g, "$1") : v;
+function nonNegative(raw) {
+  if (raw === void 0 || raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+function parseServerTiming(header) {
+  const out = { total: null, db: null, queries: null };
+  if (!header) return out;
+  let dbEntries = 0;
+  let dbDur = null;
+  let dbCount = null;
+  for (const metric of splitOutside(header, ",")) {
+    const [name = "", ...rawParams] = splitOutside(metric, ";");
+    const params = /* @__PURE__ */ new Map();
+    for (const param of rawParams) {
+      const at2 = param.indexOf("=");
+      if (at2 > 0) params.set(param.slice(0, at2).trim().toLowerCase(), unquote(param.slice(at2 + 1).trim()));
+    }
+    const dur = nonNegative(params.get("dur"));
+    const key = name.toLowerCase();
+    if (key === "total" && out.total === null) out.total = dur;
+    if (key === "db") {
+      dbEntries++;
+      if (dur !== null) dbDur = (dbDur ?? 0) + dur;
+      const count = nonNegative(params.get("count"));
+      if (count !== null) dbCount = (dbCount ?? 0) + count;
+    }
+  }
+  out.db = dbDur;
+  out.queries = dbCount ?? (dbEntries > 1 ? dbEntries : null);
+  return out;
+}
+var nextTick = () => new Promise((resolve2) => setImmediate(resolve2));
+async function timeRequest(url3, headers, timeoutMs = SERVER_TIMEOUT_MS) {
+  performance.clearResourceTimings();
+  const started = performance.now();
+  const response = await fetch(url3, { headers, redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
+  const wall = performance.now() - started;
+  await response.arrayBuffer();
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  await nextTick();
+  const entry = performance.getEntriesByType("resource").filter((e) => e.name === url3).at(-1);
+  const timing = entry instanceof PerformanceResourceTiming && entry.responseStart >= entry.requestStart && entry.requestStart > 0 ? entry : null;
+  const ttfb = timing ? timing.responseStart - timing.requestStart : wall;
+  return { ttfb: Math.round(ttfb * 10) / 10, ...parseServerTiming(response.headers.get("server-timing")) };
+}
+function logLine(s) {
+  const parts = [`${Math.round(s.ttfb)} ms`];
+  if (s.total !== null) parts.push(`total ${Math.round(s.total)} ms`);
+  if (s.db !== null) parts.push(`db ${Math.round(s.db)} ms`);
+  if (s.queries !== null) parts.push(`${s.queries} queries`);
+  return parts.join(", ");
+}
+async function sampleServer({
+  path: path4,
+  baseUrl: baseUrl2,
+  headUrl,
+  samples,
+  warmUp: warmUp2,
+  request: request2,
+  log: log3
+}) {
+  const sides = [
+    { name: "base", label: "main", url: joinUrl(baseUrl2, path4) },
+    { name: "head", label: "PR", url: joinUrl(headUrl, path4) }
+  ];
+  const out = { base: [], head: [], failures: { base: [], head: [] } };
+  const warm = [];
+  for (let i = 0; i < warmUp2; i++) {
+    for (const side of roundOrder(sides, i)) {
+      const result = await request2(side.url).then(
+        (s) => `${Math.round(s.ttfb)} ms`,
+        (err) => `failed (${firstLine(err)})`
+      );
+      warm.push(`${side.label} ${result}`);
+    }
+  }
+  if (warm.length > 0) log3(`  ${path4} server warm-up: ${warm.join(", ")}`);
+  for (let round2 = 0; round2 < samples; round2++) {
+    const line = [];
+    for (const side of roundOrder(sides, round2)) {
+      try {
+        const sample = await request2(side.url);
+        out[side.name].push(sample);
+        line.push(`${side.label} ${logLine(sample)}`);
+      } catch (err) {
+        const reason = firstLine(err);
+        out[side.name].push(null);
+        out.failures[side.name].push(reason);
+        line.push(`${side.label} FAILED ${reason}`);
+      }
+    }
+    log3(`  ${path4} server #${round2 + 1}: ${line.join("; ")}`);
+  }
+  return out;
+}
+
 // src/vitals.ts
+var DOCUMENT_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+async function measureServer(run2) {
+  const out = /* @__PURE__ */ new Map();
+  if (run2.serverSamples === 0) return out;
+  const headers = { "user-agent": DEVICES[run2.device].userAgent, accept: DOCUMENT_ACCEPT };
+  for (const [name, value] of Object.entries(run2.headers)) headers[name.toLowerCase()] = value;
+  for (const page of run2.pages) {
+    run2.log(`${page.path}: server time, ${SERVER_WARM_UP} warm-up and ${run2.serverSamples} requests per side`);
+    const samples = await sampleServer({
+      path: page.path,
+      baseUrl: run2.baseUrl,
+      headUrl: run2.headUrl,
+      samples: run2.serverSamples,
+      warmUp: SERVER_WARM_UP,
+      request: (url3) => timeRequest(url3, headers),
+      log: run2.log
+    });
+    out.set(page.path, samples);
+  }
+  return out;
+}
 async function measureVitals(run2) {
   const { log: log3, pages, rounds } = run2;
   const device = DEVICES[run2.device];
@@ -106047,6 +106242,7 @@ async function measureVitals(run2) {
     { name: "head", url: run2.headUrl }
   ];
   if (run2.prodUrl) sides.push({ name: "prod", url: run2.prodUrl, context: true });
+  const server = await measureServer(run2);
   const browser = await chromium.launch({ headless: true, executablePath: run2.executablePath });
   const results = [];
   try {
@@ -106059,7 +106255,7 @@ async function measureVitals(run2) {
     for (const page of pages) {
       log3(`${page.path}: ${rounds} rounds of main and PR${prodLoads ? `, ${prodLoads} prod loads` : ""}`);
       const { samples, failures } = await samplePage({ page, sides, rounds, contextLoads: prodLoads ?? 0, measure, log: log3 });
-      results.push({ path: page.path, loads: samples, failures });
+      results.push({ path: page.path, loads: samples, failures, server: server.get(page.path) ?? null });
     }
     return { pages: results, prodLoads };
   } finally {
@@ -106133,6 +106329,7 @@ async function run(env = process.env) {
       prodUrl: inputs.prodUrl,
       pages: inputs.pages,
       rounds: inputs.rounds,
+      serverSamples: inputs.serverSamples,
       device: inputs.device,
       headers: inputs.headers,
       log: log2
@@ -106149,6 +106346,7 @@ async function run(env = process.env) {
       ciRunUrl: ctx.ciRunUrl,
       config: {
         pairs: inputs.rounds,
+        serverRequests: inputs.serverSamples,
         device: inputs.device,
         latencyMs: device.network.latencyMs,
         downloadKbps: device.network.downloadKbps,

@@ -17,7 +17,7 @@ it as is and add only the rasteriser.
 
 ## What it shows, and why
 
-- **One metric, one page, one chart.** The metric is the one the comment flagged (LCP, FCP, CLS, TBT or INP), not a fixed
+- **One metric, one page, one chart.** The metric is the one the comment flagged (LCP, FCP, CLS, TBT, Server or INP), not a fixed
   LCP. Two metrics on one axis would need a legend and a second scale; on a phone that is unreadable.
 - **main's line, oldest to newest:** main's median per past run, the last 20 (30 at most). A run with no value is a gap
   bridged by a faint dotted line, so it reads as missing data rather than a glitch.
@@ -40,7 +40,7 @@ https://usero.io/pr-checks/chart.png?v=1&m=LCP&p=%2Fpricing&s=241.238._.246.240.
 | Param | Meaning                                                                                                          |
 | ----- | ---------------------------------------------------------------------------------------------------------------- |
 | `v`   | Format version, `1`. Anything else is a 400; a new format gets a new number and both are served.                  |
-| `m`   | Metric: `LCP`, `FCP`, `CLS`, `TBT`, `TTFB` or `INP`.                                                              |
+| `m`   | Metric: `LCP`, `FCP`, `CLS`, `TBT`, `TTFB`, `Server` or `INP`.                                                    |
 | `p`   | Page path, URI-encoded, at most 60 characters (longer ones end in `...`). The chart title shows 30.               |
 | `s`   | main's history, oldest first, `.`-separated. Timings in tens of ms, CLS in thousandths, integers 0 to 99999. `_` is a run with no value. 3 to 30 points, at least 3 of them numbers. |
 | `c`   | Optional. This PR's median, same units. Without it there is no orange dot or column.                              |
@@ -101,7 +101,7 @@ below, CLS to three decimals.
   Connector from main's latest point, 1.5 px, dash 3 4.
 
 **Y scale.** Domain covers main's values and this PR's. Its span is at least the larger of a per-metric minimum (LCP and FCP
-200 ms, TTFB and TBT 100 ms, INP 50 ms, CLS 0.05) and 20% of main's median, so run-to-run noise draws as a wobble instead of a
+200 ms, TTFB, Server and TBT 100 ms, INP 50 ms, CLS 0.05) and 20% of main's median, so run-to-run noise draws as a wobble instead of a
 cliff; then 12% padding each side, floored at 0. Gridlines at a nice step (1, 2, 2.5 or 5 x 10^n) giving two to four lines.
 Tick labels in seconds once any tick reaches 1000 ms, with as many decimals as the step needs (`2.5 s`, `2.25 s`).
 

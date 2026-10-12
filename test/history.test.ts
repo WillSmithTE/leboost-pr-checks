@@ -190,7 +190,7 @@ const result = (pages: RunResult['pages']): RunResult => ({
 	headUrl: 'https://pr.app.test',
 	prodUrl: null,
 	ciRunUrl: null,
-	config: { pairs: 8, device: 'mobile', latencyMs: 150, downloadKbps: 1638.4, uploadKbps: 750, cpuSlowdown: 4 },
+	config: { pairs: 8, serverRequests: 30, device: 'mobile', latencyMs: 150, downloadKbps: 1638.4, uploadKbps: 750, cpuSlowdown: 4 },
 	pages,
 	meta: { alpha: 0.05, prodLoads: null, durationMs: null, generatedAt: null },
 })
@@ -201,12 +201,13 @@ describe('buildHistory', () => {
 		const history = buildHistory(
 			past,
 			result([
-				{ path: '/', metrics: { LCP: metric(2405), TBT: metric(105) }, dropped: [], failures: {} },
-				{ path: '/new', metrics: { LCP: metric(900) }, dropped: [], failures: {} },
+				{ path: '/', metrics: { LCP: metric(2405), TBT: metric(105), Server: metric(120) }, dropped: [], failures: {}, serverFailures: null },
+				{ path: '/new', metrics: { LCP: metric(900) }, dropped: [], failures: {}, serverFailures: null },
 			]),
 		)
 		expect(history).toEqual({
-			'/': { LCP: [2400, 2410, null, 2390, 2405], TBT: [100, null, 110, 105] },
+			// Server is new, so only this run has it.
+			'/': { LCP: [2400, 2410, null, 2390, 2405], TBT: [100, null, 110, 105], Server: [120] },
 			'/new': { LCP: [900] },
 		})
 	})

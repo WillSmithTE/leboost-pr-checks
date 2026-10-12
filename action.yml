@@ -1,5 +1,5 @@
 name: Usero PR checks
-description: Lab web vitals for every pull request. Loads the PR preview and main back to back and comments only on changes past the noise.
+description: Lab web vitals and server time for every pull request. Loads the PR preview and main back to back and comments only on changes past the noise.
 author: Usero
 branding:
   icon: activity
@@ -24,6 +24,10 @@ inputs:
     description: Rounds per page. Each round loads main and the PR once. 3 to 50. Each extra round adds two page loads per path.
     required: false
     default: '8'
+  server-samples:
+    description: Server time requests per side and path, 10 to 200, or 0 to turn server time off. Plain GETs on warm connections, a few seconds in all.
+    required: false
+    default: '30'
   device:
     description: mobile (Lighthouse's Slow 4G and 4x CPU profile) or desktop.
     required: false

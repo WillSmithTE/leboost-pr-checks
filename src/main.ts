@@ -87,6 +87,7 @@ export async function run(env: Env = process.env): Promise<void> {
 			prodUrl: inputs.prodUrl,
 			pages: inputs.pages,
 			rounds: inputs.rounds,
+			serverSamples: inputs.serverSamples,
 			device: inputs.device,
 			headers: inputs.headers,
 			log,
@@ -103,6 +104,7 @@ export async function run(env: Env = process.env): Promise<void> {
 			ciRunUrl: ctx.ciRunUrl,
 			config: {
 				pairs: inputs.rounds,
+				serverRequests: inputs.serverSamples,
 				device: inputs.device,
 				latencyMs: device.network.latencyMs,
 				downloadKbps: device.network.downloadKbps,

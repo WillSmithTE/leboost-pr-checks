@@ -9,7 +9,6 @@ import {
 	LOAD_METRICS,
 	METRICS,
 	type MetricName,
-	SERVER_NEW_CONNECTIONS,
 } from './config'
 import type { Load, PageSamples, SideName } from './run'
 import { chartImage, type History } from './chart'
@@ -395,11 +394,21 @@ function pageRank(page: PageResult): number {
 	return Math.min(2, ...metricEntries(page).map(([, m]) => VERDICT_RANK[m.summary.verdict]))
 }
 
-// Regressions first, then improvements, then the rest, each in METRICS order.
+// FCP within the floor of LCP on both sides, with the same verdict, only repeats the LCP row (pages whose LCP is text).
+export function fcpRepeatsLcp(page: Pick<PageResult, 'metrics'>): boolean {
+	const fcp = page.metrics.FCP?.summary
+	const lcp = page.metrics.LCP?.summary
+	if (!fcp || !lcp || fcp.verdict !== lcp.verdict) return false
+	const near = (a: number, b: number): boolean => Math.abs(a - b) < FLOORS.FCP.absFloor
+	return near(fcp.baseMedian, lcp.baseMedian) && near(fcp.headMedian, lcp.headMedian)
+}
+
+// What the comment reports: regressions first, then improvements, then the rest, each in METRICS order.
 function sortedMetrics(page: PageResult): [MetricName, MetricResult][] {
-	return metricEntries(page).sort(
-		([a, x], [b, y]) => VERDICT_RANK[x.summary.verdict] - VERDICT_RANK[y.summary.verdict] || METRICS.indexOf(a) - METRICS.indexOf(b),
-	)
+	const repeat = fcpRepeatsLcp(page)
+	return metricEntries(page)
+		.filter(([metric]) => !CONTEXT_ONLY.includes(metric) && !(repeat && metric === 'FCP'))
+		.sort(([a, x], [b, y]) => VERDICT_RANK[x.summary.verdict] - VERDICT_RANK[y.summary.verdict] || METRICS.indexOf(a) - METRICS.indexOf(b))
 }
 
 // The change a verdict is about: for LCP and FCP their time after the first byte, otherwise the raw medians.
@@ -460,6 +469,15 @@ export function countVerdicts(result: RunResult): { regressions: number; improve
 	return { regressions: flagged(pages, 'regressed').length, improvements: flagged(pages, 'improved').length }
 }
 
+// What decides a new comment instead of an edit: the set of regressions, or a run that could not compare.
+export function verdictKey(result: RunResult | null): string {
+	if (!result) return 'not-measured'
+	const pages = comparedPages(result)
+	if (pages.length === 0) return 'not-compared'
+	const regressions = flagged(pages, 'regressed').map(f => `${f.metric}:${encodeURIComponent(f.page.path)}`)
+	return regressions.length === 0 ? 'clean' : `regressed ${regressions.sort().join(' ')}`
+}
+
 export function commentTitle(result: RunResult): string {
 	const compared = comparedPages(result).length
 	if (compared === 0) return 'Lab web vitals: could not compare with main'
@@ -476,9 +494,18 @@ export function commentTitle(result: RunResult): string {
 const sideLoads = (result: RunResult, side: SideName): number =>
 	side === 'prod' ? (result.meta.prodLoads ?? result.config.pairs) : result.config.pairs
 
-function gapLines(result: RunResult): string[] {
+interface Gap {
+	line: string
+	// A prod failure never touches the verdict, so it waits in the fold.
+	prodOnly: boolean
+}
+
+function gapLines(result: RunResult): Gap[] {
 	const loads = result.config.pairs
-	const lines: string[] = []
+	const lines: Gap[] = []
+	const push = (line: string, prodOnly = false): void => {
+		lines.push({ line, prodOnly })
+	}
 	for (const page of result.pages) {
 		const failures = SIDES.flatMap(side => {
 			const errors = page.failures[side]
@@ -490,19 +517,19 @@ function gapLines(result: RunResult): string[] {
 			// Lead with why the page was skipped: the sides that ran short of good loads.
 			const short = failures.filter(([side, errors]) => side !== 'prod' && loads - errors.length < MIN_SAMPLES)
 			const why = short.length > 0 ? listJoin(short.map(failed)) : `no metric was reported by ${MIN_SAMPLES} loads on both sides`
-			lines.push(`- ${code(page.path)} was not compared: ${why}.`)
-			for (const f of failures.filter(f => !short.includes(f))) lines.push(`- ${code(page.path)}: ${failed(f)}.`)
-			lines.push(...serverGapLines(page, result.config.serverRequests))
+			push(`- ${code(page.path)} was not compared: ${why}.`)
+			for (const f of failures.filter(f => !short.includes(f))) push(`- ${code(page.path)}: ${failed(f)}.`, f[0] === 'prod')
+			for (const line of serverGapLines(page, result.config.serverRequests)) push(line)
 			continue
 		}
-		for (const f of failures) lines.push(`- ${code(page.path)}: ${failed(f)}.`)
+		for (const f of failures) push(`- ${code(page.path)}: ${failed(f)}.`, f[0] === 'prod')
 		for (const d of page.dropped) {
 			const short = (['base', 'head'] as const)
 				.filter(side => d[side] < MIN_SAMPLES)
 				.map(side => `${d[side]} of ${loads} loads on ${SIDE_LABEL[side]}`)
-			lines.push(`- ${d.metric} on ${code(page.path)} was left out: only ${listJoin(short)} reported it, ${MIN_SAMPLES} needed.`)
+			push(`- ${d.metric} on ${code(page.path)} was left out: only ${listJoin(short)} reported it, ${MIN_SAMPLES} needed.`)
 		}
-		lines.push(...serverGapLines(page, result.config.serverRequests))
+		for (const line of serverGapLines(page, result.config.serverRequests)) push(line)
 	}
 	return lines
 }
@@ -522,25 +549,44 @@ function serverGapLines(page: PageResult, requests: number): string[] {
 
 const queryCount = (v: number | null): string => (v === null ? 'n/a' : String(Math.round(v * 10) / 10))
 
-// Under the Server Change: database time and queries from Server-Timing.
-function serverDetail(d: ServerDetail): string {
+// Database time and queries from Server-Timing, only under a judged Server change and only when the page queries at all.
+function serverDetail(d: ServerDetail, verdict: Verdict): string | null {
+	if (verdict === 'no-change') return null
+	const busy = (p: MedianPair | null): boolean => p !== null && ((p.baseMedian ?? 0) > 0 || (p.headMedian ?? 0) > 0)
+	if (!busy(d.db) && !busy(d.queries)) return null
 	const parts: string[] = []
 	if (d.db) parts.push(`db ${formatValue('Server', d.db.baseMedian)} to ${formatValue('Server', d.db.headMedian)}`)
 	if (d.queries) parts.push(`${queryCount(d.queries.baseMedian)} to ${queryCount(d.queries.headMedian)} queries`)
-	return parts.length > 0 ? `<br><sub>${parts.join(', ')}</sub>` : ''
+	return `Server ${parts.join(', ')}`
 }
 
 // Cold starts, measured but never judged: too few land per run for a test. Null when neither side had one.
-function coldStartRow(c: ColdStarts, hasProd: boolean): string | null {
+function coldStartDetail(c: ColdStarts): string | null {
 	if (c.base.length === 0 && c.head.length === 0) return null
-	const side = (values: number[], requests: number): string =>
-		`${values.length > 0 ? formatValue('Server', median(values)) : 'none'}, ${values.length}${NBSP}of${NBSP}${requests}`
-	const b = median(c.base)
-	const h = median(c.head)
-	const change = b !== null && h !== null ? `${formatChange('Server', b, h, null)}, not judged` : 'not judged'
-	const cells = ['Cold start', side(c.base, c.requests.base), side(c.head, c.requests.head), change]
-	if (hasProd) cells.push('n/a')
-	return `| ${cells.join(' | ')} |`
+	const at = (values: number[]): string => (values.length > 0 ? formatValue('Server', median(values)) : 'none')
+	const counts =
+		c.requests.base === c.requests.head
+			? `${c.base.length} and ${c.head.length} of ${c.requests.base}`
+			: `${c.base.length} of ${c.requests.base} and ${c.head.length} of ${c.requests.head}`
+	return `Cold starts ${at(c.base)} to ${at(c.head)} (${counts}), not judged`
+}
+
+// How far the first byte moved the full paint medians: LCP and FCP are judged after it. Null under the floor.
+function firstByteGap(metric: MetricName, s: MetricSummary): number | null {
+	if (!s.fromFirstByte) return null
+	const gap = s.headMedian - s.baseMedian - (s.fromFirstByte.headMedian - s.fromFirstByte.baseMedian)
+	return Math.abs(gap) < FLOORS[metric].absFloor ? null : gap
+}
+
+// "First byte +312 ms, left out of LCP and FCP": why main and this PR can be far apart while Change is small.
+function firstByteDetail(rows: readonly [MetricName, MetricResult][]): string | null {
+	const gaps = rows.flatMap(([metric, m]) => {
+		const gap = firstByteGap(metric, m.summary)
+		return gap === null ? [] : [[metric, gap] as const]
+	})
+	if (gaps.length === 0) return null
+	const gap = gaps[0][1]
+	return `First byte ${gap > 0 ? '+' : MINUS}${formatValue('TTFB', Math.abs(gap))}, left out of ${listJoin(gaps.map(([metric]) => metric))}`
 }
 
 export function formatBytes(bytes: number): string {
@@ -553,34 +599,49 @@ export function formatBytes(bytes: number): string {
 // The server bundle is what a cold start loads and evaluates, so its growth is the leading cold start regression.
 function bundleLine({ base, head }: BundleSizes): string {
 	if (base === null || head === null) {
-		const [size, side] = base === null ? [head, 'this PR'] : [base, 'main']
-		return `Server bundle: ${size === null ? 'n/a' : formatBytes(size)} on ${side}, the other side's size was not given. Not judged.`
+		const [size, side, other] = base === null ? [head, 'this PR', 'main'] : [base, 'main', 'this PR']
+		return `Server bundle ${size === null ? 'n/a' : formatBytes(size)} on ${side}, ${other}'s size not given.`
 	}
 	const diff = head - base
+	if (diff === 0) return `Server bundle ${formatBytes(base)}, no change.`
 	const sign = diff > 0 ? '+' : MINUS
-	const parts = [diff === 0 ? 'no change' : `${sign}${formatBytes(Math.abs(diff))}`]
-	if (diff !== 0 && base > 0) parts.push(`${sign}${Math.abs((diff / base) * 100).toFixed(1)}%`)
-	const change = parts.join(', ')
-	return `Server bundle: ${formatBytes(base)} on main, ${formatBytes(head)} on this PR (${change}). A larger bundle makes cold starts slower. Not judged.`
+	const pct = base > 0 ? `, ${sign}${Math.abs((diff / base) * 100).toFixed(1)}%` : ''
+	return `Server bundle ${formatBytes(base)} to ${formatBytes(head)} (${sign}${formatBytes(Math.abs(diff))}${pct}), not judged.`
 }
 
-// Five columns at most so it fits GitHub mobile; only significant rows get a word, in bold.
+// A quiet row where both sides read zero (no shift, no blocking, no server work) says nothing.
+const allZero = (metric: MetricName, s: MetricSummary): boolean =>
+	s.verdict === 'no-change' && [s.baseMedian, s.headMedian].every(v => formatValue(metric, v) === formatValue(metric, 0))
+
+// Four short columns so it fits a phone; only significant rows get a word, in bold. Notes that explain a row (first byte,
+// database time, cold starts) and prod's medians sit in one full-width block under the table, never inside a cell.
 function pageTable(page: PageResult, hasProd: boolean): string[] {
 	const header = ['Metric', 'main', `this${NBSP}PR`, 'Change']
-	if (hasProd) header.push('prod')
-	const rows = sortedMetrics(page)
-		.filter(([metric]) => !CONTEXT_ONLY.includes(metric))
-		.map(([metric, m]) => {
-			const s = m.summary
-			const { change } = tested(metric, s)
-			const detail = m.server ? serverDetail(m.server) : ''
-			const word = s.verdict === 'no-change' ? '' : `**${capitalise(directionWord(metric, s.verdict))}** `
-			const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${detail}`]
-			if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian))
-			const cold = m.server ? coldStartRow(m.server.coldStarts, hasProd) : null
-			return cold ? `| ${cells.join(' | ')} |\n${cold}` : `| ${cells.join(' | ')} |`
-		})
-	return [`**${code(page.path)}**`, '', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows]
+	const shown = sortedMetrics(page).filter(([metric, m]) => !allZero(metric, m.summary))
+	const rows = shown.map(([metric, m]) => {
+		const s = m.summary
+		const t = tested(metric, s)
+		// A percent only where the change counts; on a quiet row it is noise and wraps the cell on a phone.
+		const change =
+			s.verdict === 'no-change'
+				? formatChange(metric, t.baseMedian, t.headMedian, null)
+				: `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`
+		return `| ${[metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), change].join(' | ')} |`
+	})
+	const server = page.metrics.Server
+	const prod = shown.flatMap(([metric, m]) => {
+		const v = m.summary.vsProd?.prodMedian
+		return typeof v === 'number' && Number.isFinite(v) ? [`${metric} ${formatValue(metric, v)}`] : []
+	})
+	const notes = [
+		firstByteDetail(shown),
+		server?.server ? serverDetail(server.server, server.summary.verdict) : null,
+		server?.server ? coldStartDetail(server.server.coldStarts) : null,
+		hasProd && prod.length > 0 ? `prod for reference: ${prod.join(', ')}` : null,
+	].filter((n): n is string => n !== null)
+	const lines = [`**${code(page.path)}**`, '', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows]
+	if (notes.length > 0) lines.push('', `<sub>${notes.join('<br>')}</sub>`)
+	return lines
 }
 
 export interface CommentOptions {
@@ -593,16 +654,11 @@ export interface CommentOptions {
 
 const MAX_CHARTS = 3
 
-// One trend chart per page with a significant change, of its first flagged metric; for a quiet run, LCP on the first page.
-function charts(pages: readonly PageResult[], flags: readonly Flag[], history: History | undefined, baseUrl: string | undefined): string[] {
+// One trend chart per page with a significant change, of its first flagged metric. A quiet run has none.
+function charts(flags: readonly Flag[], history: History | undefined, baseUrl: string | undefined): string[] {
 	if (!history) return []
 	const picks: [PageResult, MetricName][] = []
 	for (const f of flags) if (!picks.some(([page]) => page === f.page)) picks.push([f.page, f.metric])
-	if (flags.length === 0 && pages.length > 0) {
-		const first = pages[0]
-		const metric = first.metrics.LCP ? 'LCP' : metricEntries(first).find(([m]) => !CONTEXT_ONLY.includes(m))?.[0]
-		if (metric) picks.push([first, metric])
-	}
 	return picks.slice(0, MAX_CHARTS).flatMap(([page, metric]) => {
 		const series = history[page.path]?.[metric]
 		const current = page.metrics[metric]?.summary.headMedian ?? null
@@ -612,74 +668,37 @@ function charts(pages: readonly PageResult[], flags: readonly Flag[], history: H
 }
 
 export function renderComment(result: RunResult, { failOnRegression = false, history, chartBaseUrl }: CommentOptions = {}): string {
-	const { config, meta } = result
+	const { config } = result
 	const hasProd = Boolean(result.prodUrl)
 	const pages = comparedPages(result).sort((a, b) => pageRank(a) - pageRank(b))
-	const regressed = flagged(pages, 'regressed')
-	const improved = flagged(pages, 'improved')
-	const flags = [...regressed, ...improved]
-	const chartLines = charts(pages, flags, history, chartBaseUrl)
+	const flags = [...flagged(pages, 'regressed'), ...flagged(pages, 'improved')]
 	const lines = [`### ${commentTitle(result)}`, '']
 
-	// A quiet run stays short: no summary block, and its chart waits inside the table fold.
-	if (flags.length > 0) lines.push(...diffBlock(flags), '', ...chartLines)
+	// Above the fold: the title, and the changes when there are any. Everything else is in the fold.
+	if (flags.length > 0) lines.push(...diffBlock(flags), '')
 
-	// "No change" is not "proven fine": say what a run this size can miss, next to the claim.
-	if (pages.length > 0 && regressed.length === 0) {
-		const lead =
-			improved.length > 0 ? 'No regressions.' : `Nothing on ${listJoin(pages.map(p => code(p.path)))} moved past run-to-run noise.`
-		// The LCP floor is the smallest change that can count, so anything under it always slips through.
-		const lcpFloors = pages.flatMap(p => {
-			const floor = p.metrics.LCP?.summary.floor
-			return typeof floor === 'number' && Number.isFinite(floor) ? [floor] : []
-		})
-		const example =
-			lcpFloors.length > 0 ? `, such as an LCP change under ${formatValue('LCP', Math.round(Math.max(...lcpFloors) / 10) * 10)}` : ''
-		lines.push(`${lead} With ${config.pairs} loads per side, smaller shifts can slip through${example}.`, '')
-	}
-
+	// What main or this PR could not measure can hide a regression, so it stays in view; prod failures fold away.
 	const gaps = gapLines(result)
-	if (gaps.length > 0) lines.push('**Incomplete data**', '', ...gaps, '')
-
+	const incomplete = (list: Gap[]): string[] => (list.length > 0 ? ['**Incomplete data**', '', ...list.map(g => g.line), ''] : [])
+	const folded = pages.length > 0 ? gaps.filter(g => g.prodOnly) : []
+	lines.push(...incomplete(gaps.filter(g => !folded.includes(g))))
 	if (pages.length > 0) {
-		lines.push(`<details${regressed.length > 0 ? ' open' : ''}>`, '<summary>All metrics</summary>', '')
-		if (flags.length === 0) lines.push(...chartLines)
+		lines.push(`<details${flags.length > 0 ? ' open' : ''}>`, `<summary>All metrics, ${config.pairs} ${config.device} loads per side</summary>`, '')
+		lines.push(...charts(flags, history, chartBaseUrl))
 		for (const page of pages) lines.push(...pageTable(page, hasProd), '')
 		if (result.bundle) lines.push(bundleLine(result.bundle), '')
-		const fromFirstByteMetrics = METRICS.filter(k => pages.some(p => p.metrics[k]?.summary.fromFirstByte))
-		if (fromFirstByteMetrics.length > 0) {
-			lines.push(
-				`For ${listJoin(fromFirstByteMetrics)}, Change is the time after the first byte, so server speed can neither hide nor fake a change. main and this PR show the full medians.`,
-				'',
-			)
-		}
-		if (hasProd) {
-			lines.push(
-				'prod is for reference and never affects the result. It can load third-party tags, data and caches the previews do not, so a gap there is usually not this PR.',
-				'',
-			)
-		}
+		if (folded.length > 0) lines.push(...folded.map(g => g.line), '')
 		lines.push('</details>', '')
 	}
-
-	const net = `${config.latencyMs} ms RTT, ${(config.downloadKbps / 1024).toFixed(1)} Mbps down and ${config.cpuSlowdown}x CPU`
-	const sha = result.headSha ? code(result.headSha.slice(0, 7)) : null
-	const prodNote = hasProd && meta.prodLoads !== null && meta.prodLoads !== config.pairs ? ` (${meta.prodLoads} on prod)` : ''
-	const footer = [
-		failOnRegression ? 'Fails the job on a regression.' : 'Report only, never fails the build.',
-		`Medians of ${config.pairs} cold ${config.device} loads per side${prodNote}, interleaved, at ${net}.`,
-	]
-	if (config.serverRequests > 0) {
-		footer.push(
-			`Server time from ${config.serverRequests} warm requests per side, unthrottled, after ${SERVER_NEW_CONNECTIONS} on new connections to catch cold starts.`,
-		)
-	}
-	footer.push(
-		`A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`,
-	)
-	if (result.ciRunUrl) footer.push(`[CI run](${result.ciRunUrl})${sha ? ` for ${sha}` : ''}.`)
-	else if (sha) footer.push(`Head ${sha}.`)
-	footer.push(`By [Usero PR checks](${ACTION_URL}).`)
-	lines.push(`<sub>${footer.join(' ')}</sub>`)
+	lines.push(`<sub>${commentFooter(failOnRegression, result.ciRunUrl, result.headSha)}</sub>`)
 	return `${lines.join('\n').trimEnd()}\n`
+}
+
+export const METHOD_URL = `${ACTION_URL}#method`
+
+// One line: what the check does to the build, where the method lives, and the run behind these numbers.
+export function commentFooter(failOnRegression: boolean, ciRunUrl: string | null, headSha?: string | null): string {
+	const parts = [failOnRegression ? 'Fails the job on a regression.' : 'Report only.', `[How this is measured](${METHOD_URL}).`]
+	if (ciRunUrl) parts.push(`[CI run](${ciRunUrl})${headSha ? ` for ${code(headSha.slice(0, 7))}` : ''}.`)
+	return parts.join(' ')
 }

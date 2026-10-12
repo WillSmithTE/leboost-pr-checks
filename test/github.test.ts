@@ -54,7 +54,7 @@ function fakeApi(routes: (call: Call) => { status: number; data: unknown }) {
 		const call: Call = { method: init?.method ?? 'GET', url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null }
 		calls.push(call)
 		const { status, data } = routes(call)
-		return new Response(JSON.stringify(data), { status })
+		return new Response(status === 204 ? null : JSON.stringify(data), { status })
 	}
 	return { api: new GitHubApi('t', 'https://api.github.com', fetchImpl), calls }
 }
@@ -65,28 +65,58 @@ describe('upsertComment', () => {
 	const lines: string[] = []
 	const log = (line: string) => lines.push(line)
 
-	it('creates the comment when the PR has none of ours', async () => {
+	const ours = (id: number, verdict: string | null) => ({ id, body: `${marker}\n${verdict === null ? '' : `<!-- verdict: ${verdict} -->\n`}### Lab` })
+
+	it('creates the comment, with its verdict, when the PR has none of ours', async () => {
 		const { api, calls } = fakeApi(c => (c.method === 'GET' ? { status: 200, data: [{ id: 1, body: 'hi' }] } : { status: 201, data: {} }))
-		expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, body: '### Lab' }, log)).toBe('created')
-		expect(calls[1]).toMatchObject({ method: 'POST', url: 'https://api.github.com/repos/acme/shop/issues/5/comments', body: { body: `${marker}\n### Lab` } })
+		expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, verdict: 'clean', body: '### Lab' }, log)).toBe('created')
+		expect(calls[1]).toMatchObject({
+			method: 'POST',
+			url: 'https://api.github.com/repos/acme/shop/issues/5/comments',
+			body: { body: `${marker}\n<!-- verdict: clean -->\n### Lab` },
+		})
 	})
 
-	it('edits the earlier comment with the same marker, looking past the first page', async () => {
+	it('edits the earlier comment in place when the verdict is the same, looking past the first page', async () => {
 		const page1 = Array.from({ length: 100 }, (_, i) => ({ id: i + 1, body: 'other' }))
 		const { api, calls } = fakeApi(c => {
 			if (c.method === 'PATCH') return { status: 200, data: {} }
 			const page = new URL(c.url).searchParams.get('page')
-			return page === '1' ? { status: 200, data: page1 } : { status: 200, data: [{ id: 777, body: `${marker}\nold` }] }
+			return page === '1' ? { status: 200, data: page1 } : { status: 200, data: [ours(777, 'regressed LCP:%2F')] }
 		})
-		expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, body: 'new' }, log)).toBe('updated')
+		expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, verdict: 'regressed LCP:%2F', body: 'new' }, log)).toBe('updated')
 		expect(calls.at(-1)).toMatchObject({ method: 'PATCH', url: 'https://api.github.com/repos/acme/shop/issues/comments/777' })
+		expect(calls.some(c => c.method === 'POST' || c.method === 'DELETE')).toBe(false)
+	})
+
+	it('edits a comment from before verdicts were recorded', async () => {
+		const { api, calls } = fakeApi(c => (c.method === 'GET' ? { status: 200, data: [ours(9, null)] } : { status: 200, data: {} }))
+		expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, verdict: 'clean', body: 'x' }, log)).toBe('updated')
+		expect(calls.at(-1)?.method).toBe('PATCH')
+	})
+
+	it('posts a new comment and deletes the old one when the verdict changes, so GitHub emails it', async () => {
+		for (const [before, after] of [
+			['clean', 'regressed LCP:%2F'],
+			['regressed LCP:%2F', 'clean'],
+			['regressed LCP:%2F', 'regressed CLS:%2F LCP:%2F'],
+		]) {
+			const { api, calls } = fakeApi(c => {
+				if (c.method === 'GET') return { status: 200, data: [ours(42, before)] }
+				return c.method === 'DELETE' ? { status: 204, data: null } : { status: 201, data: {} }
+			})
+			expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, verdict: after, body: 'x' }, log)).toBe('replaced')
+			expect(calls.map(c => c.method)).toEqual(['GET', 'POST', 'DELETE'])
+			expect(calls[2].url).toBe('https://api.github.com/repos/acme/shop/issues/comments/42')
+			expect(lines.at(-1)).toContain('deleted the old one')
+		}
 	})
 
 	it('skips with a clear line when the token is read-only, as on a fork PR', async () => {
 		const { api } = fakeApi(c =>
 			c.method === 'GET' ? { status: 200, data: [] } : { status: 403, data: { message: 'Resource not accessible by integration' } },
 		)
-		expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, body: 'x' }, log)).toBe('no-permission')
+		expect(await upsertComment(api, { repo: 'acme/shop', prNumber: 5, marker, verdict: 'clean', body: 'x' }, log)).toBe('no-permission')
 		expect(lines.at(-1)).toContain('Skipped the PR comment: the token cannot write pull request comments (HTTP 403)')
 		expect(lines.at(-1)).toContain('job summary')
 	})
@@ -116,6 +146,6 @@ describe('comment helpers', () => {
 		const md = notMeasuredComment('browserType.launch: Target closed', { ciRunUrl: 'https://github.com/acme/shop/actions/runs/1' })
 		expect(md).toContain('### Lab web vitals: not measured on this push')
 		expect(md).toContain('[CI run](https://github.com/acme/shop/actions/runs/1)')
-		expect(md).toContain('never blocks the PR')
+		expect(md).toContain('<sub>Report only. [How this is measured]')
 	})
 })

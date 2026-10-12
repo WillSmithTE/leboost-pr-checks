@@ -61857,8 +61857,11 @@ async function findPullRequest(api, repo, sha, log3) {
   }
 }
 var MAX_COMMENT_PAGES = 30;
-async function upsertComment(api, { repo, prNumber, marker: marker2, body: body2 }, log3) {
+var VERDICT_LINE = /^<!-- verdict: ([^>]*) -->$/m;
+var verdictLine = (verdict) => `<!-- verdict: ${verdict} -->`;
+async function upsertComment(api, { repo, prNumber, marker: marker2, verdict, body: body2 }, log3) {
   const full = `${marker2}
+${verdictLine(verdict)}
 ${body2}`;
   try {
     let existing = null;
@@ -61866,15 +61869,27 @@ ${body2}`;
       const { status: status2, data } = await api.request("GET", `/repos/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`);
       if (status2 !== 200 || !Array.isArray(data)) return reportFailure(status2, "read", log3);
       const hit = data.find((c) => str(at(c, "body"))?.startsWith(marker2));
-      if (hit) existing = posInt(at(hit, "id"));
+      const id = posInt(at(hit, "id"));
+      if (id !== null) existing = { id, verdict: str(at(hit, "body"))?.match(VERDICT_LINE)?.[1] ?? null };
       if (data.length < 100) break;
     }
-    const { status } = existing === null ? await api.request("POST", `/repos/${repo}/issues/${prNumber}/comments`, { body: full }) : await api.request("PATCH", `/repos/${repo}/issues/comments/${existing}`, { body: full });
-    if (status === 200 || status === 201) {
-      log3(`${existing === null ? "Posted" : "Updated"} the results comment on PR #${prNumber}.`);
-      return existing === null ? "created" : "updated";
+    if (existing !== null && (existing.verdict === null || existing.verdict === verdict)) {
+      const { status: status2 } = await api.request("PATCH", `/repos/${repo}/issues/comments/${existing.id}`, { body: full });
+      if (status2 !== 200) return reportFailure(status2, "write", log3);
+      log3(`Updated the results comment on PR #${prNumber}; the verdict is unchanged, so no notification.`);
+      return "updated";
     }
-    return reportFailure(status, "write", log3);
+    const { status } = await api.request("POST", `/repos/${repo}/issues/${prNumber}/comments`, { body: full });
+    if (status !== 200 && status !== 201) return reportFailure(status, "write", log3);
+    if (existing === null) {
+      log3(`Posted the results comment on PR #${prNumber}.`);
+      return "created";
+    }
+    const removed = await api.request("DELETE", `/repos/${repo}/issues/comments/${existing.id}`);
+    log3(
+      `The verdict changed (${existing.verdict} to ${verdict}), so posted a new results comment on PR #${prNumber}` + (removed.status === 204 ? " and deleted the old one." : ` and could not delete the old one (HTTP ${removed.status}).`)
+    );
+    return "replaced";
   } catch (err) {
     log3(`Could not comment on PR #${prNumber}: ${err instanceof Error ? err.message : String(err)}. The results are in the job summary.`);
     return "failed";
@@ -62542,10 +62557,16 @@ var comparedPages = (result) => result.pages.filter((p) => Object.keys(p.metrics
 function pageRank(page) {
   return Math.min(2, ...metricEntries(page).map(([, m]) => VERDICT_RANK[m.summary.verdict]));
 }
+function fcpRepeatsLcp(page) {
+  const fcp = page.metrics.FCP?.summary;
+  const lcp = page.metrics.LCP?.summary;
+  if (!fcp || !lcp || fcp.verdict !== lcp.verdict) return false;
+  const near = (a, b) => Math.abs(a - b) < FLOORS.FCP.absFloor;
+  return near(fcp.baseMedian, lcp.baseMedian) && near(fcp.headMedian, lcp.headMedian);
+}
 function sortedMetrics(page) {
-  return metricEntries(page).sort(
-    ([a, x], [b, y]) => VERDICT_RANK[x.summary.verdict] - VERDICT_RANK[y.summary.verdict] || METRICS.indexOf(a) - METRICS.indexOf(b)
-  );
+  const repeat = fcpRepeatsLcp(page);
+  return metricEntries(page).filter(([metric]) => !CONTEXT_ONLY.includes(metric) && !(repeat && metric === "FCP")).sort(([a, x], [b, y]) => VERDICT_RANK[x.summary.verdict] - VERDICT_RANK[y.summary.verdict] || METRICS.indexOf(a) - METRICS.indexOf(b));
 }
 function tested(metric, s) {
   const t = s.fromFirstByte ?? s;
@@ -62583,6 +62604,13 @@ function countVerdicts(result) {
   const pages = comparedPages(result);
   return { regressions: flagged(pages, "regressed").length, improvements: flagged(pages, "improved").length };
 }
+function verdictKey(result) {
+  if (!result) return "not-measured";
+  const pages = comparedPages(result);
+  if (pages.length === 0) return "not-compared";
+  const regressions = flagged(pages, "regressed").map((f) => `${f.metric}:${encodeURIComponent(f.page.path)}`);
+  return regressions.length === 0 ? "clean" : `regressed ${regressions.sort().join(" ")}`;
+}
 function commentTitle(result) {
   const compared = comparedPages(result).length;
   if (compared === 0) return "Lab web vitals: could not compare with main";
@@ -62598,6 +62626,9 @@ var sideLoads = (result, side) => side === "prod" ? result.meta.prodLoads ?? res
 function gapLines(result) {
   const loads = result.config.pairs;
   const lines2 = [];
+  const push = (line, prodOnly = false) => {
+    lines2.push({ line, prodOnly });
+  };
   for (const page of result.pages) {
     const failures = SIDES.flatMap((side) => {
       const errors = page.failures[side];
@@ -62607,17 +62638,17 @@ function gapLines(result) {
     if (Object.keys(page.metrics).length === 0) {
       const short = failures.filter(([side, errors]) => side !== "prod" && loads - errors.length < MIN_SAMPLES);
       const why = short.length > 0 ? listJoin(short.map(failed)) : `no metric was reported by ${MIN_SAMPLES} loads on both sides`;
-      lines2.push(`- ${code(page.path)} was not compared: ${why}.`);
-      for (const f of failures.filter((f2) => !short.includes(f2))) lines2.push(`- ${code(page.path)}: ${failed(f)}.`);
-      lines2.push(...serverGapLines(page, result.config.serverRequests));
+      push(`- ${code(page.path)} was not compared: ${why}.`);
+      for (const f of failures.filter((f2) => !short.includes(f2))) push(`- ${code(page.path)}: ${failed(f)}.`, f[0] === "prod");
+      for (const line of serverGapLines(page, result.config.serverRequests)) push(line);
       continue;
     }
-    for (const f of failures) lines2.push(`- ${code(page.path)}: ${failed(f)}.`);
+    for (const f of failures) push(`- ${code(page.path)}: ${failed(f)}.`, f[0] === "prod");
     for (const d of page.dropped) {
       const short = ["base", "head"].filter((side) => d[side] < MIN_SAMPLES).map((side) => `${d[side]} of ${loads} loads on ${SIDE_LABEL[side]}`);
-      lines2.push(`- ${d.metric} on ${code(page.path)} was left out: only ${listJoin(short)} reported it, ${MIN_SAMPLES} needed.`);
+      push(`- ${d.metric} on ${code(page.path)} was left out: only ${listJoin(short)} reported it, ${MIN_SAMPLES} needed.`);
     }
-    lines2.push(...serverGapLines(page, result.config.serverRequests));
+    for (const line of serverGapLines(page, result.config.serverRequests)) push(line);
   }
   return lines2;
 }
@@ -62633,21 +62664,34 @@ function serverGapLines(page, requests) {
   return sides.map((side) => `- ${code(page.path)}: server time: ${failed(side)}.`);
 }
 var queryCount = (v) => v === null ? "n/a" : String(Math.round(v * 10) / 10);
-function serverDetail(d) {
+function serverDetail(d, verdict) {
+  if (verdict === "no-change") return null;
+  const busy = (p) => p !== null && ((p.baseMedian ?? 0) > 0 || (p.headMedian ?? 0) > 0);
+  if (!busy(d.db) && !busy(d.queries)) return null;
   const parts = [];
   if (d.db) parts.push(`db ${formatValue("Server", d.db.baseMedian)} to ${formatValue("Server", d.db.headMedian)}`);
   if (d.queries) parts.push(`${queryCount(d.queries.baseMedian)} to ${queryCount(d.queries.headMedian)} queries`);
-  return parts.length > 0 ? `<br><sub>${parts.join(", ")}</sub>` : "";
+  return `Server ${parts.join(", ")}`;
 }
-function coldStartRow(c, hasProd) {
+function coldStartDetail(c) {
   if (c.base.length === 0 && c.head.length === 0) return null;
-  const side = (values2, requests) => `${values2.length > 0 ? formatValue("Server", median(values2)) : "none"}, ${values2.length}${NBSP}of${NBSP}${requests}`;
-  const b = median(c.base);
-  const h = median(c.head);
-  const change = b !== null && h !== null ? `${formatChange("Server", b, h, null)}, not judged` : "not judged";
-  const cells = ["Cold start", side(c.base, c.requests.base), side(c.head, c.requests.head), change];
-  if (hasProd) cells.push("n/a");
-  return `| ${cells.join(" | ")} |`;
+  const at2 = (values2) => values2.length > 0 ? formatValue("Server", median(values2)) : "none";
+  const counts = c.requests.base === c.requests.head ? `${c.base.length} and ${c.head.length} of ${c.requests.base}` : `${c.base.length} of ${c.requests.base} and ${c.head.length} of ${c.requests.head}`;
+  return `Cold starts ${at2(c.base)} to ${at2(c.head)} (${counts}), not judged`;
+}
+function firstByteGap(metric, s) {
+  if (!s.fromFirstByte) return null;
+  const gap = s.headMedian - s.baseMedian - (s.fromFirstByte.headMedian - s.fromFirstByte.baseMedian);
+  return Math.abs(gap) < FLOORS[metric].absFloor ? null : gap;
+}
+function firstByteDetail(rows) {
+  const gaps = rows.flatMap(([metric, m]) => {
+    const gap2 = firstByteGap(metric, m.summary);
+    return gap2 === null ? [] : [[metric, gap2]];
+  });
+  if (gaps.length === 0) return null;
+  const gap = gaps[0][1];
+  return `First byte ${gap > 0 ? "+" : MINUS}${formatValue("TTFB", Math.abs(gap))}, left out of ${listJoin(gaps.map(([metric]) => metric))}`;
 }
 function formatBytes(bytes2) {
   const abs = Math.abs(bytes2);
@@ -62657,42 +62701,45 @@ function formatBytes(bytes2) {
 }
 function bundleLine({ base, head }) {
   if (base === null || head === null) {
-    const [size, side] = base === null ? [head, "this PR"] : [base, "main"];
-    return `Server bundle: ${size === null ? "n/a" : formatBytes(size)} on ${side}, the other side's size was not given. Not judged.`;
+    const [size, side, other] = base === null ? [head, "this PR", "main"] : [base, "main", "this PR"];
+    return `Server bundle ${size === null ? "n/a" : formatBytes(size)} on ${side}, ${other}'s size not given.`;
   }
   const diff = head - base;
+  if (diff === 0) return `Server bundle ${formatBytes(base)}, no change.`;
   const sign = diff > 0 ? "+" : MINUS;
-  const parts = [diff === 0 ? "no change" : `${sign}${formatBytes(Math.abs(diff))}`];
-  if (diff !== 0 && base > 0) parts.push(`${sign}${Math.abs(diff / base * 100).toFixed(1)}%`);
-  const change = parts.join(", ");
-  return `Server bundle: ${formatBytes(base)} on main, ${formatBytes(head)} on this PR (${change}). A larger bundle makes cold starts slower. Not judged.`;
+  const pct = base > 0 ? `, ${sign}${Math.abs(diff / base * 100).toFixed(1)}%` : "";
+  return `Server bundle ${formatBytes(base)} to ${formatBytes(head)} (${sign}${formatBytes(Math.abs(diff))}${pct}), not judged.`;
 }
+var allZero = (metric, s) => s.verdict === "no-change" && [s.baseMedian, s.headMedian].every((v) => formatValue(metric, v) === formatValue(metric, 0));
 function pageTable(page, hasProd) {
   const header = ["Metric", "main", `this${NBSP}PR`, "Change"];
-  if (hasProd) header.push("prod");
-  const rows = sortedMetrics(page).filter(([metric]) => !CONTEXT_ONLY.includes(metric)).map(([metric, m]) => {
+  const shown = sortedMetrics(page).filter(([metric, m]) => !allZero(metric, m.summary));
+  const rows = shown.map(([metric, m]) => {
     const s = m.summary;
-    const { change } = tested(metric, s);
-    const detail = m.server ? serverDetail(m.server) : "";
-    const word = s.verdict === "no-change" ? "" : `**${capitalise(directionWord(metric, s.verdict))}** `;
-    const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${detail}`];
-    if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian));
-    const cold = m.server ? coldStartRow(m.server.coldStarts, hasProd) : null;
-    return cold ? `| ${cells.join(" | ")} |
-${cold}` : `| ${cells.join(" | ")} |`;
+    const t = tested(metric, s);
+    const change = s.verdict === "no-change" ? formatChange(metric, t.baseMedian, t.headMedian, null) : `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`;
+    return `| ${[metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), change].join(" | ")} |`;
   });
-  return [`**${code(page.path)}**`, "", `| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`, ...rows];
+  const server = page.metrics.Server;
+  const prod = shown.flatMap(([metric, m]) => {
+    const v = m.summary.vsProd?.prodMedian;
+    return typeof v === "number" && Number.isFinite(v) ? [`${metric} ${formatValue(metric, v)}`] : [];
+  });
+  const notes = [
+    firstByteDetail(shown),
+    server?.server ? serverDetail(server.server, server.summary.verdict) : null,
+    server?.server ? coldStartDetail(server.server.coldStarts) : null,
+    hasProd && prod.length > 0 ? `prod for reference: ${prod.join(", ")}` : null
+  ].filter((n) => n !== null);
+  const lines2 = [`**${code(page.path)}**`, "", `| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`, ...rows];
+  if (notes.length > 0) lines2.push("", `<sub>${notes.join("<br>")}</sub>`);
+  return lines2;
 }
 var MAX_CHARTS = 3;
-function charts(pages, flags, history, baseUrl2) {
+function charts(flags, history, baseUrl2) {
   if (!history) return [];
   const picks = [];
   for (const f of flags) if (!picks.some(([page]) => page === f.page)) picks.push([f.page, f.metric]);
-  if (flags.length === 0 && pages.length > 0) {
-    const first = pages[0];
-    const metric = first.metrics.LCP ? "LCP" : metricEntries(first).find(([m]) => !CONTEXT_ONLY.includes(m))?.[0];
-    if (metric) picks.push([first, metric]);
-  }
   return picks.slice(0, MAX_CHARTS).flatMap(([page, metric]) => {
     const series = history[page.path]?.[metric];
     const current = page.metrics[metric]?.summary.headMedian ?? null;
@@ -62701,67 +62748,33 @@ function charts(pages, flags, history, baseUrl2) {
   });
 }
 function renderComment(result, { failOnRegression = false, history, chartBaseUrl } = {}) {
-  const { config, meta } = result;
+  const { config } = result;
   const hasProd = Boolean(result.prodUrl);
   const pages = comparedPages(result).sort((a, b) => pageRank(a) - pageRank(b));
-  const regressed = flagged(pages, "regressed");
-  const improved = flagged(pages, "improved");
-  const flags = [...regressed, ...improved];
-  const chartLines = charts(pages, flags, history, chartBaseUrl);
+  const flags = [...flagged(pages, "regressed"), ...flagged(pages, "improved")];
   const lines2 = [`### ${commentTitle(result)}`, ""];
-  if (flags.length > 0) lines2.push(...diffBlock(flags), "", ...chartLines);
-  if (pages.length > 0 && regressed.length === 0) {
-    const lead = improved.length > 0 ? "No regressions." : `Nothing on ${listJoin(pages.map((p) => code(p.path)))} moved past run-to-run noise.`;
-    const lcpFloors = pages.flatMap((p) => {
-      const floor = p.metrics.LCP?.summary.floor;
-      return typeof floor === "number" && Number.isFinite(floor) ? [floor] : [];
-    });
-    const example = lcpFloors.length > 0 ? `, such as an LCP change under ${formatValue("LCP", Math.round(Math.max(...lcpFloors) / 10) * 10)}` : "";
-    lines2.push(`${lead} With ${config.pairs} loads per side, smaller shifts can slip through${example}.`, "");
-  }
+  if (flags.length > 0) lines2.push(...diffBlock(flags), "");
   const gaps = gapLines(result);
-  if (gaps.length > 0) lines2.push("**Incomplete data**", "", ...gaps, "");
+  const incomplete = (list) => list.length > 0 ? ["**Incomplete data**", "", ...list.map((g) => g.line), ""] : [];
+  const folded = pages.length > 0 ? gaps.filter((g) => g.prodOnly) : [];
+  lines2.push(...incomplete(gaps.filter((g) => !folded.includes(g))));
   if (pages.length > 0) {
-    lines2.push(`<details${regressed.length > 0 ? " open" : ""}>`, "<summary>All metrics</summary>", "");
-    if (flags.length === 0) lines2.push(...chartLines);
+    lines2.push(`<details${flags.length > 0 ? " open" : ""}>`, `<summary>All metrics, ${config.pairs} ${config.device} loads per side</summary>`, "");
+    lines2.push(...charts(flags, history, chartBaseUrl));
     for (const page of pages) lines2.push(...pageTable(page, hasProd), "");
     if (result.bundle) lines2.push(bundleLine(result.bundle), "");
-    const fromFirstByteMetrics = METRICS.filter((k) => pages.some((p) => p.metrics[k]?.summary.fromFirstByte));
-    if (fromFirstByteMetrics.length > 0) {
-      lines2.push(
-        `For ${listJoin(fromFirstByteMetrics)}, Change is the time after the first byte, so server speed can neither hide nor fake a change. main and this PR show the full medians.`,
-        ""
-      );
-    }
-    if (hasProd) {
-      lines2.push(
-        "prod is for reference and never affects the result. It can load third-party tags, data and caches the previews do not, so a gap there is usually not this PR.",
-        ""
-      );
-    }
+    if (folded.length > 0) lines2.push(...folded.map((g) => g.line), "");
     lines2.push("</details>", "");
   }
-  const net = `${config.latencyMs} ms RTT, ${(config.downloadKbps / 1024).toFixed(1)} Mbps down and ${config.cpuSlowdown}x CPU`;
-  const sha = result.headSha ? code(result.headSha.slice(0, 7)) : null;
-  const prodNote = hasProd && meta.prodLoads !== null && meta.prodLoads !== config.pairs ? ` (${meta.prodLoads} on prod)` : "";
-  const footer = [
-    failOnRegression ? "Fails the job on a regression." : "Report only, never fails the build.",
-    `Medians of ${config.pairs} cold ${config.device} loads per side${prodNote}, interleaved, at ${net}.`
-  ];
-  if (config.serverRequests > 0) {
-    footer.push(
-      `Server time from ${config.serverRequests} warm requests per side, unthrottled, after ${SERVER_NEW_CONNECTIONS} on new connections to catch cold starts.`
-    );
-  }
-  footer.push(
-    `A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`
-  );
-  if (result.ciRunUrl) footer.push(`[CI run](${result.ciRunUrl})${sha ? ` for ${sha}` : ""}.`);
-  else if (sha) footer.push(`Head ${sha}.`);
-  footer.push(`By [Usero PR checks](${ACTION_URL}).`);
-  lines2.push(`<sub>${footer.join(" ")}</sub>`);
+  lines2.push(`<sub>${commentFooter(failOnRegression, result.ciRunUrl, result.headSha)}</sub>`);
   return `${lines2.join("\n").trimEnd()}
 `;
+}
+var METHOD_URL = `${ACTION_URL}#method`;
+function commentFooter(failOnRegression, ciRunUrl, headSha) {
+  const parts = [failOnRegression ? "Fails the job on a regression." : "Report only.", `[How this is measured](${METHOD_URL}).`];
+  if (ciRunUrl) parts.push(`[CI run](${ciRunUrl})${headSha ? ` for ${code(headSha.slice(0, 7))}` : ""}.`);
+  return parts.join(" ");
 }
 
 // src/run.ts
@@ -106398,13 +106411,12 @@ function commentMarker(inputs) {
   return `<!-- usero-pr-checks ${inputs.device} ${base.host}${base.pathname.replace(/\/+$/, "")} -->`;
 }
 function notMeasuredComment(error2, ctx) {
-  const where2 = ctx.ciRunUrl ? `The [CI run](${ctx.ciRunUrl}) has the details.` : "The job log has the details.";
   return [
     "### Lab web vitals: not measured on this push",
     "",
     `The check stopped before it could compare this PR with main: ${error2}`,
     "",
-    `${where2} Report only, this never blocks the PR.`,
+    `<sub>${commentFooter(false, ctx.ciRunUrl)}</sub>`,
     ""
   ].join("\n");
 }
@@ -106425,11 +106437,11 @@ async function writeFiles(dir, result, comment) {
   ]);
   return result ? jsonPath : null;
 }
-async function postComment(inputs, ctx, api, body2) {
+async function postComment(inputs, ctx, api, body2, verdict) {
   if (!inputs.comment) return log2("comment is false, so no PR comment.");
   if (ctx.prNumber === null) return log2(`No pull request for this ${ctx.eventName ?? "run"}, so no PR comment. The results are in the job summary.`);
   if (!api || !ctx.repo) return log2("No github-token, so no PR comment. The results are in the job summary.");
-  await upsertComment(api, { repo: ctx.repo, prNumber: ctx.prNumber, marker: commentMarker(inputs), body: body2 }, log2);
+  await upsertComment(api, { repo: ctx.repo, prNumber: ctx.prNumber, marker: commentMarker(inputs), verdict, body: body2 }, log2);
 }
 async function run(env = process.env) {
   let inputs;
@@ -106503,7 +106515,7 @@ async function run(env = process.env) {
   log2(`
 ${comment}`);
   await summary.addRaw(comment, true).write();
-  await postComment(inputs, ctx, api, comment);
+  await postComment(inputs, ctx, api, comment, verdictKey(result));
   if (jsonPath) await saveResult({ jsonPath, name: artifactName(inputs), env, log: log2 });
   const { regressions, improvements } = result ? countVerdicts(result) : { regressions: 0, improvements: 0 };
   setOutput("regressions", regressions);

@@ -29,8 +29,10 @@ You need a preview URL for each PR and one for main. Add this job after the job 
           paths: / /pricing
 ```
 
-That is the whole setup. The first run posts a comment on the PR, and every later push updates the same comment. The full
-result is also in the job summary.
+That is the whole setup. The first run posts a comment on the PR. A later push with the same verdict edits that comment in
+place, quietly; a push that changes the verdict (a new regression, the last one fixed, or a different set) posts a fresh
+comment and deletes the old one, because GitHub only sends email for new comments. The full result is also in the job
+summary.
 
 Recipes for common hosts are below: [Cloudflare](#cloudflare-workers-and-pages), [Vercel](#vercel),
 [Netlify](#netlify) and [sites you can serve inside the job](#serve-both-builds-inside-the-job).
@@ -40,20 +42,25 @@ it at a site that reports to your production analytics.
 
 ## What it reports
 
-- The comment's title states the result: "no significant change vs main", "1 regression vs main", "2 regressions, 1 improvement
-  vs main".
+The comment is built to be read in a notification email on a phone: the answer first, everything else folded.
+
+- The title states the result: "no significant change vs main", "1 regression vs main", "2 regressions, 1 improvement vs
+  main".
 - Under it, a `diff` block with one line per change: slower on a red `-` line, faster on a green `+` line, and the word
-  "slower" or "faster" on every line, so it reads the same in a notification email where colour is gone.
-- When nothing moved there is no block. One line says what a run of this size can still miss, for example "an LCP change
-  under 110 ms".
+  "slower" or "faster" on every line, so it reads the same in an email where colour is gone. A quiet run has no block.
+- Pages or metrics that main or the PR could not measure (a preview that 500s, an LCP the page never reported) are listed
+  right under it, since a gap there can hide a regression.
+- Everything else is in one fold, open when something changed: a trend chart for each page that changed (main's last 20
+  runs as a line, this PR as one orange dot beside it, from the third run on, see [Trend chart](#trend-chart)), then a
+  four-column table per page (metric, main, this PR, change), with prod's medians on one line under it. Only significant
+  rows say Slower or Faster.
+- Rows that add nothing are left out: CLS, TBT or Server reading zero on both sides, and FCP when it matches LCP within
+  100 ms on both sides with the same verdict (a page whose largest paint is its first). Such an FCP is not counted twice in
+  the title or the `regressions` output either.
 - Server time is judged like the rest, in its own Server row: a slow query or an extra database round trip in a PR is a
-  regression. If your server sends a `Server-Timing` header, its database time and query count show under the row, see
-  [Server time](#server-time).
-- Failed loads, and pages or metrics without enough good loads, are listed too.
-- A table with every metric per page, folded away unless something regressed. Only the significant rows say Slower or
-  Faster.
-- A trend chart for each page that changed: main's last 20 runs as a line, this PR as one orange dot beside it. A quiet run
-  gets one LCP chart inside the folded table. The chart appears from the third run on, see [Trend chart](#trend-chart).
+  regression. When it regresses and your server sends a `Server-Timing` header, its database time and query count show
+  under the row, see [Server time](#server-time).
+- One footer line: "Report only", a link to [Method](#method), and the CI run.
 
 The [demo repository](https://github.com/usero-feedback/pr-checks-demo/pulls?q=is%3Apr) has a PR with a deliberate slow hero
 image and a PR that changes nothing, with the comment this action posted on each.
@@ -64,7 +71,7 @@ image and a PR that changes nothing, with the comment this action posted on each
 | -------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `head-url`           | required              | The PR's preview URL.                                                                                                                     |
 | `base-url`           | required              | What to compare against, usually main's preview. The comment calls it "main". Any path on the URL is kept, so `https://x.dev/app` works. |
-| `prod-url`           |                       | Your production URL. Its medians are shown in the table for reference and never change the result. Its loads are real production visits. |
+| `prod-url`           |                       | Your production URL. Its medians are shown on one line under each page's table, for reference, and never change the result. Its loads are real production visits. |
 | `paths`              | `/`                   | Pages to measure. One per line, or separated by spaces or commas.                                                                        |
 | `rounds`             | `8`                   | Rounds per page, 3 to 50. Each round loads main and the PR once, in alternating order.                                                   |
 | `server-samples`     | `30`                  | Server time requests per side and page, 10 to 200, or `0` to turn server time off. See [Server time](#server-time).                      |
@@ -115,10 +122,11 @@ The requests use the mobile browser's user agent and your `headers`.
   start-up (loading and evaluating the server bundle), and at low traffic that is most first visits. New connections are
   the likeliest way to reach one, which is why they come first. A request counts as cold when the server says so in
   `Server-Timing` (`isolate;desc=cold`, below), or without that marker when it is slower than 3x the side's warm median and
-  300 ms over it. The Cold start row shows each side's median cold first byte and how many requests were cold. A run
-  gets a handful at best, so it is measured, not judged, and cold requests never count in the Server row.
+  300 ms over it. A line under the Server row shows each side's median cold first byte and how many requests were cold,
+  for example `cold start 1.02 s to 1.51 s (4 and 2 of 43), not judged`. A run gets a handful at best, so it is measured,
+  not judged, and cold requests never count in the Server row.
 - **Bundle size.** Pass `base-bundle-bytes` and `head-bundle-bytes` and the comment shows both and the change: a bigger
-  server bundle is the most common way a PR makes cold starts slower. Not judged.
+  server bundle is the most common way a PR makes cold starts slower, since a cold start loads and evaluates it. Not judged.
 
 - **The Server row is judged** like LCP or TBT (the test is under [Method](#method)), so a PR that adds a slow query, an
   extra database round trip or slow rendering on the server gets a regression on its own line. LCP and FCP are judged from
@@ -144,7 +152,7 @@ Server-Timing: total;dur=182.4, db;dur=41.7;count=6, isolate;desc=warm
 | `total;dur=<ms>`   | Time spent in your handler, up to the response headers. When every request on both sides has it, the Server row tests `total` instead of the first byte, which leaves the network out. |
 | `db;dur=<ms>`      | Database time. Shown under the Server row as main's and the PR's medians.                                   |
 | `db;count=<n>`     | Number of queries, shown next to it. Several `db` entries are summed, and without `count` each entry counts as one query. |
-| `isolate;desc=cold` or `warm` | `cold` on the first request a server instance (isolate, lambda, process) handles, `warm` after. Decides which requests go in the Cold start row. A module-level counter is enough. |
+| `isolate;desc=cold` or `warm` | `cold` on the first request a server instance (isolate, lambda, process) handles, `warm` after. Decides which requests count as cold starts. A module-level counter is enough. |
 
 Other metrics in the header are ignored, and a page without the header (a prerendered or static page) is measured from its
 first byte like any other. Only send `total` if it covers CPU time too: on Cloudflare Workers the clock stops
@@ -383,8 +391,14 @@ up to 80 samples, ties included) and a Hodges-Lehmann shift with its confidence 
 the page's first script could run when that is later: a server that answers in a millisecond beats the browser's own
 start-up by about 200 ms, and without this a 300 ms slower server read as 160 ms faster paint on the demo. Preview servers
 switch between fast and slow first bytes for minutes at a time, on their own, and that used to swamp real paint changes. The
-table still shows the full medians. Server time has its own row, measured on warm connections (see
+table's main and this PR columns still show the full medians, and Change shows the time after the first byte, so the two
+can disagree: when the first byte moved by more than the floor, a line under the first paint row says so, for example
+`first byte +312 ms, not counted`. Server time has its own row, measured on warm connections (see
 [Server time](#server-time)), so a server slowdown counts once, there.
+
+**prod is for reference only.** Its medians sit on one line under each page's table and never change a verdict. Production
+can load third-party tags, real data and warm caches that the previews do not, so a gap between prod and the PR is usually
+not the PR.
 
 **A failed load** (an HTTP error, a timeout) is recorded with its reason and left out of the stats. A metric needs at least 3
 good loads per side to be compared.
@@ -403,7 +417,7 @@ rounds per page scored in 1000 random subsets of 8 rounds, with known regression
 | +500 ms server delay, as an LCP change | 0%, 0% (by design)   |
 
 The last row is expected: paint is measured from the first byte, so a slower server counts in the Server row instead.
-Smaller pages have smaller floors, so smaller changes can count; the comment states the floor of each run. On the demo's
+Smaller pages have smaller floors, so smaller changes can count. On the demo's
 static page a heavier hero image (+107 KB) came out as +531 ms LCP and was flagged.
 
 **Server time** was measured the same way on 2026-10-12 with `npm run power` (`scripts/power-server.ts`): on a GitHub
@@ -425,7 +439,7 @@ three times in four. An earlier version used one connection per side and saw two
 (Usero PR #297; with the then 50 ms floor the first of those read as 58 ms faster), which is why the floor is 75 ms and the
 requests rotate. Warm medians per run stayed within 96 to 167 ms on `/` and 62 to 100 ms on `/docs`. The preview first-byte
 swings that made page-load TTFB useless (0.1 s against 1.3 to 1.9 s) did not show up on warm connections; on new
-connections they did, as cold starts (1.3 to 2.9 s), which is what the Cold start row reports. On the demo, a server 300 ms
+connections they did, as cold starts (1.3 to 2.9 s), which is what the cold start line reports. On the demo, a server 300 ms
 slower per page was flagged (PR #4). Neither Usero page queries its database for an anonymous visitor, so these runs cover
 rendering and the network, not query time.
 
@@ -436,8 +450,8 @@ rendering and the network, not query time.
 - Previews differ from production: cold servers, small databases, cold CDN caches. The verdict compares preview with preview,
   so both sides share those conditions.
 - Pages behind a login are not supported yet. `headers` can pass a static token if your preview accepts one.
-- With 8 rounds a change under the floor can slip through, and the comment says so on every clean run. More rounds narrow
-  that gap and take longer.
+- With 8 rounds a change under the floor can slip through, which is why a clean run says "no significant change" rather
+  than "no change". More rounds narrow that gap and take longer.
 - Chrome only.
 
 ## License

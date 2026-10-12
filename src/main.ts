@@ -8,7 +8,7 @@ import { DEFAULT_ALPHA, DEVICES } from './config'
 import { contextFromEvent, type Env, findPullRequest, GitHubApi, posInt, readEvent, type RunContext, upsertComment } from './github'
 import { artifactName, buildHistory, loadPastRuns } from './history'
 import { InputError, type Inputs, parseInputs } from './inputs'
-import { buildResult, countVerdicts, renderComment, type RunResult } from './report'
+import { buildResult, commentFooter, countVerdicts, renderComment, type RunResult, verdictKey } from './report'
 import { firstLine } from './run'
 import { saveResult } from './upload'
 import { measureVitals } from './vitals'
@@ -22,13 +22,12 @@ export function commentMarker(inputs: Pick<Inputs, 'device' | 'baseUrl'>): strin
 }
 
 export function notMeasuredComment(error: string, ctx: Pick<RunContext, 'ciRunUrl'>): string {
-	const where = ctx.ciRunUrl ? `The [CI run](${ctx.ciRunUrl}) has the details.` : 'The job log has the details.'
 	return [
 		'### Lab web vitals: not measured on this push',
 		'',
 		`The check stopped before it could compare this PR with main: ${error}`,
 		'',
-		`${where} Report only, this never blocks the PR.`,
+		`<sub>${commentFooter(false, ctx.ciRunUrl)}</sub>`,
 		'',
 	].join('\n')
 }
@@ -51,11 +50,11 @@ async function writeFiles(dir: string, result: RunResult | null, comment: string
 	return result ? jsonPath : null
 }
 
-async function postComment(inputs: Inputs, ctx: RunContext, api: GitHubApi | null, body: string): Promise<void> {
+async function postComment(inputs: Inputs, ctx: RunContext, api: GitHubApi | null, body: string, verdict: string): Promise<void> {
 	if (!inputs.comment) return log('comment is false, so no PR comment.')
 	if (ctx.prNumber === null) return log(`No pull request for this ${ctx.eventName ?? 'run'}, so no PR comment. The results are in the job summary.`)
 	if (!api || !ctx.repo) return log('No github-token, so no PR comment. The results are in the job summary.')
-	await upsertComment(api, { repo: ctx.repo, prNumber: ctx.prNumber, marker: commentMarker(inputs), body }, log)
+	await upsertComment(api, { repo: ctx.repo, prNumber: ctx.prNumber, marker: commentMarker(inputs), verdict, body }, log)
 }
 
 export async function run(env: Env = process.env): Promise<void> {
@@ -133,7 +132,7 @@ export async function run(env: Env = process.env): Promise<void> {
 	const jsonPath = await writeFiles(outDir, result, comment)
 	log(`\n${comment}`)
 	await core.summary.addRaw(comment, true).write()
-	await postComment(inputs, ctx, api, comment)
+	await postComment(inputs, ctx, api, comment, verdictKey(result))
 	if (jsonPath) await saveResult({ jsonPath, name: artifactName(inputs), env, log })
 
 	const { regressions, improvements } = result ? countVerdicts(result) : { regressions: 0, improvements: 0 }

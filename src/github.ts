@@ -149,33 +149,48 @@ export async function findPullRequest(api: GitHubApi, repo: string, sha: string,
 // 3000 comments; a busier PR gets a fresh comment instead of an endless scan.
 const MAX_COMMENT_PAGES = 30
 
-export type CommentOutcome ='created' | 'updated' | 'no-permission' | 'failed'
+export type CommentOutcome = 'created' | 'updated' | 'replaced' | 'no-permission' | 'failed'
 
-// Creates the comment, or edits the earlier one carrying the same marker so a PR keeps one comment per setup.
+const VERDICT_LINE = /^<!-- verdict: ([^>]*) -->$/m
+export const verdictLine = (verdict: string): string => `<!-- verdict: ${verdict} -->`
+
+// GitHub emails only on a new comment. Same verdict as last time: edit the comment in place, quietly. A new verdict
+// (clean to regression, back, or a different set): post a fresh one so it reaches the inbox, and delete the old one.
+// A comment from before verdicts were recorded is edited.
 export async function upsertComment(
 	api: GitHubApi,
-	{ repo, prNumber, marker, body }: { repo: string; prNumber: number; marker: string; body: string },
+	{ repo, prNumber, marker, verdict, body }: { repo: string; prNumber: number; marker: string; verdict: string; body: string },
 	log: Log,
 ): Promise<CommentOutcome> {
-	const full = `${marker}\n${body}`
+	const full = `${marker}\n${verdictLine(verdict)}\n${body}`
 	try {
-		let existing: number | null = null
+		let existing: { id: number; verdict: string | null } | null = null
 		for (let page = 1; existing === null && page <= MAX_COMMENT_PAGES; page++) {
 			const { status, data } = await api.request('GET', `/repos/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`)
 			if (status !== 200 || !Array.isArray(data)) return reportFailure(status, 'read', log)
 			const hit = data.find(c => str(at(c, 'body'))?.startsWith(marker))
-			if (hit) existing = posInt(at(hit, 'id'))
+			const id = posInt(at(hit, 'id'))
+			if (id !== null) existing = { id, verdict: str(at(hit, 'body'))?.match(VERDICT_LINE)?.[1] ?? null }
 			if (data.length < 100) break
 		}
-		const { status } =
-			existing === null
-				? await api.request('POST', `/repos/${repo}/issues/${prNumber}/comments`, { body: full })
-				: await api.request('PATCH', `/repos/${repo}/issues/comments/${existing}`, { body: full })
-		if (status === 200 || status === 201) {
-			log(`${existing === null ? 'Posted' : 'Updated'} the results comment on PR #${prNumber}.`)
-			return existing === null ? 'created' : 'updated'
+		if (existing !== null && (existing.verdict === null || existing.verdict === verdict)) {
+			const { status } = await api.request('PATCH', `/repos/${repo}/issues/comments/${existing.id}`, { body: full })
+			if (status !== 200) return reportFailure(status, 'write', log)
+			log(`Updated the results comment on PR #${prNumber}; the verdict is unchanged, so no notification.`)
+			return 'updated'
 		}
-		return reportFailure(status, 'write', log)
+		const { status } = await api.request('POST', `/repos/${repo}/issues/${prNumber}/comments`, { body: full })
+		if (status !== 200 && status !== 201) return reportFailure(status, 'write', log)
+		if (existing === null) {
+			log(`Posted the results comment on PR #${prNumber}.`)
+			return 'created'
+		}
+		const removed = await api.request('DELETE', `/repos/${repo}/issues/comments/${existing.id}`)
+		log(
+			`The verdict changed (${existing.verdict} to ${verdict}), so posted a new results comment on PR #${prNumber}` +
+				(removed.status === 204 ? ' and deleted the old one.' : ` and could not delete the old one (HTTP ${removed.status}).`),
+		)
+		return 'replaced'
 	} catch (err) {
 		log(`Could not comment on PR #${prNumber}: ${err instanceof Error ? err.message : String(err)}. The results are in the job summary.`)
 		return 'failed'

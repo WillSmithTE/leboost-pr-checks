@@ -4,11 +4,13 @@ import {
 	buildResult,
 	commentTitle,
 	countVerdicts,
+	fcpRepeatsLcp,
 	formatValue,
 	type PageInput,
 	renderComment,
 	type RunResult,
 	summarisePage,
+	verdictKey,
 } from '../src/report'
 import type { History } from '../src/chart'
 import { notMeasuredComment } from '../src/main'
@@ -45,8 +47,18 @@ describe('buildResult', () => {
 		expect(docs.dropped).toEqual([])
 	})
 
-	it('counts verdicts for the outputs', () => {
-		expect(countVerdicts(result)).toEqual({ regressions: 2, improvements: 2 })
+	it('counts verdicts for the outputs, once for an FCP that repeats LCP', () => {
+		// /docs: FCP and LCP both 2.01 s to 1.71 s and both faster, so one improvement.
+		expect(fcpRepeatsLcp(docs)).toBe(true)
+		expect(fcpRepeatsLcp(home)).toBe(false)
+		expect(countVerdicts(result)).toEqual({ regressions: 2, improvements: 1 })
+	})
+
+	it('keys the verdict on the set of regressions, so only a new verdict posts a new comment', () => {
+		expect(verdictKey(result)).toBe('regressed CLS:%2F LCP:%2F')
+		expect(verdictKey(null)).toBe('not-measured')
+		expect(verdictKey(build({ pages: [FIXTURE_PAGES[2]] }))).toBe('not-compared')
+		expect(verdictKey(build({ pages: [] }))).toBe('not-compared')
 	})
 
 	it('keeps the test settings and run timing in meta', () => {
@@ -271,13 +283,10 @@ describe('renderComment', () => {
 		expect(emoji.test('✅ done')).toBe(true)
 	})
 
-	it('places a regression chart under the summary block and a quiet run chart inside the fold', () => {
+	it('opens the fold on a chart for each changed page, and draws none for a quiet run', () => {
 		const regression = ALL_COMMENTS['one-regression-chart']
-		expect(regression).toMatch(/```\n\n<img src="https:\/\/usero\.io\/pr-checks\/chart\.png\?v=1&amp;m=LCP&amp;p=%2F&amp;s=[0-9._]+&amp;c=299" width="520" alt="LCP on \/, main's last 20 runs ranged [^"]+\. This PR: 2\.99 s\.">\n/)
-		expect(regression.indexOf('<img')).toBeLessThan(regression.indexOf('<details'))
-		const clean = ALL_COMMENTS['clean-chart']
-		expect(clean.indexOf('<img')).toBeGreaterThan(clean.indexOf('<summary>'))
-		expect(clean.match(/<img /g)).toHaveLength(1)
+		expect(regression).toMatch(/<\/summary>\n\n<img src="https:\/\/usero\.io\/pr-checks\/chart\.png\?v=1&amp;m=LCP&amp;p=%2F&amp;s=[0-9._]+&amp;c=299" width="520" alt="LCP on \/, main's last 20 runs ranged [^"]+\. This PR: 2\.99 s\.">\n/)
+		expect(ALL_COMMENTS['clean-chart']).toBe(ALL_COMMENTS.clean)
 		// One chart per page with a change, of its first flagged metric.
 		const mixed = ALL_COMMENTS['mixed-chart']
 		expect(mixed.match(/<img /g)).toHaveLength(2)
@@ -291,67 +300,73 @@ describe('renderComment', () => {
 		expect(short).not.toContain('<img')
 	})
 
-	it('leads with the title, says it never fails the build and keeps to the copy rules', () => {
+	it('leads with the title, ends on one short footer line and keeps to the copy rules', () => {
 		for (const md of Object.values(SCENARIOS).map(r => render(r))) {
 			expect(md.startsWith('### Lab web vitals: ')).toBe(true)
-			expect(md).toContain('never fails the build')
+			expect(md).toMatch(/\n<sub>Report only\. \[How this is measured\]\(https:\/\/github\.com\/usero-feedback\/pr-checks#method\)\. \[CI run\]\([^)]+\) for `9f8e7d6`\.<\/sub>\n$/)
 			expect(prose(md)).not.toMatch(/—|--|genuinely|truly|simply|really/)
 			expect(md).not.toMatch(/\p{Extended_Pictographic}/u)
+			// No explanatory paragraphs: every line is a heading, a table, a list item, a tag or the diff.
+			const loose = md.split('\n').filter(l => l !== '' && !/^(###|\||- |\+ |```|<|\*\*)/.test(l) && !l.startsWith('Server bundle'))
+			expect(loose).toEqual([])
 		}
 	})
 
-	it('answers a clean run in the title, says what it can miss and folds the table away', () => {
+	it('answers a clean run in the title alone and folds the table away', () => {
 		const md = render(SCENARIOS.clean)
-		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
-		expect(md).toContain('Nothing on `/` and `/docs` moved past run-to-run noise.')
-		// The LCP floor: 5% of `/`'s 2.2 s after the first byte.
-		expect(md).toContain('With 8 loads per side, smaller shifts can slip through, such as an LCP change under 110 ms.')
-		expect(md).not.toMatch(/server responded|reference and never affects the result\. Each preview/)
-		expect(md).toContain('<details>\n<summary>All metrics</summary>')
-		// Quiet runs stay short: no summary block, no direction words.
+		expect(md).toMatch(/^### Lab web vitals: no significant change vs main\n\n<details>\n<summary>All metrics, 8 mobile loads per side<\/summary>\n/)
+		// Quiet runs stay short: no summary block, no direction words, no chart.
 		expect(md).not.toContain('```diff')
-		expect(md).not.toMatch(/Slower|Faster|Worse|Better/)
+		expect(md).not.toMatch(/Slower|Faster|Worse|Better|<img/)
 	})
 
 	it('names each regression in a diff block with page, metric, size and word, and opens the table', () => {
 		const md = render(SCENARIOS['one-regression'])
-		expect(md).toContain('### Lab web vitals: 1 regression vs main\n\n```diff\n- LCP  /  579 ms slower (26%)\n```\n')
-		expect(md).toContain('<details open>')
-		expect(md).toContain('| LCP | 2.41 s | 2.99 s | **Slower** +579 ms (+26%) | 2.41 s |')
-		// Unchanged rows carry no word.
-		expect(md).toContain('| FCP | 1.80 s | 1.82 s | +16 ms (+1%) | 1.81 s |')
-		expect(md).not.toContain('slip through')
+		expect(md).toContain('### Lab web vitals: 1 regression vs main\n\n```diff\n- LCP  /  579 ms slower (26%)\n```\n\n<details open>\n')
+		expect(md).toContain('| LCP | 2.41 s | 2.99 s | **Slower** +579 ms (+26%) |')
+		// Unchanged rows carry no word and no percent.
+		expect(md).toContain('| FCP | 1.80 s | 1.82 s | +16 ms |')
+	})
+
+	it('leaves out rows that say nothing: zero on both sides, or an FCP that repeats LCP', () => {
+		const md = render(SCENARIOS.clean)
+		const docs = md.slice(md.indexOf('**`/docs`**'))
+		// /docs has CLS 0.000 and TBT 0 ms on both sides.
+		expect(docs).not.toMatch(/\| (CLS|TBT) \|/)
+		expect(md).toContain('| CLS | 0.002 | 0.002 | 0.000 |')
+		const mixed = render(SCENARIOS.mixed)
+		const mixedDocs = mixed.slice(mixed.indexOf('**`/docs`**'))
+		expect(mixedDocs).toContain('| LCP | 2.01 s | 1.71 s | **Faster** −302 ms (−16%) |')
+		expect(mixedDocs).not.toContain('| FCP |')
+		expect(mixed).not.toContain('+ FCP')
 	})
 
 	it('puts regressions on - lines before improvements on + lines, aligned, and lists failed loads', () => {
 		const md = render(SCENARIOS.mixed)
-		expect(md).toContain('### Lab web vitals: 2 regressions, 2 improvements vs main, 1 page not compared\n')
+		expect(md).toContain('### Lab web vitals: 2 regressions, 1 improvement vs main, 1 page not compared\n')
 		expect(md).toContain(
-			[
-				'```diff',
-				'- LCP  /      500 ms slower (23%)',
-				'- CLS  /       0.079 worse',
-				'+ LCP  /docs  302 ms faster (16%)',
-				'+ FCP  /docs  302 ms faster (16%)',
-				'```',
-			].join('\n'),
+			['```diff', '- LCP  /      500 ms slower (23%)', '- CLS  /       0.079 worse', '+ LCP  /docs  302 ms faster (16%)', '```'].join('\n'),
 		)
-		expect(md).toContain('| CLS | 0.002 | 0.081 | **Worse** +0.079 | n/a |')
-		expect(md).toContain('| LCP | 2.01 s | 1.71 s | **Faster** −302 ms (−16%) | 1.40 s |')
-		expect(md).toContain('- `/checkout` was not compared: this PR failed 6 of 6 loads (HTTP 500).')
+		expect(md).toContain('| CLS | 0.002 | 0.081 | **Worse** +0.079 |')
+		// A page this PR broke stays in view under the diff; prod failures fold away, they never touch the verdict.
+		expect(md).toContain('```\n\n**Incomplete data**\n\n- `/checkout` was not compared: this PR failed 6 of 6 loads (HTTP 500).\n\n<details open>')
+		expect(md.match(/\*\*Incomplete data\*\*/g)).toHaveLength(1)
+		expect(md.indexOf('- `/`: prod failed 4 of 6 loads (HTTP 503).')).toBeGreaterThan(md.indexOf('<details open>'))
 		expect(md).toContain('- `/checkout`: prod failed 6 of 6 loads (HTTP 404).')
 		expect(md).toContain('- `/`: prod failed 4 of 6 loads (HTTP 503).')
 		expect(md.indexOf('**`/`**')).toBeLessThan(md.indexOf('**`/docs`**'))
 	})
 
-	it('shows prod as a plain reference value, never as praise or blame', () => {
+	it('shows prod as one plain reference line per page, never as praise or blame', () => {
 		const md = render(SCENARIOS.clean)
-		expect(md).toContain('| TBT | 281 ms | 284 ms | +3 ms (+1%) | 744 ms |')
+		expect(md).toContain('| TBT | 281 ms | 284 ms | +3 ms |\n| Server | 120 ms | 120 ms | 0 ms |\n\n<sub>prod for reference: LCP 2.41 s, FCP 1.81 s, CLS 0.002, TBT 744 ms</sub>\n')
+		// Only the metrics the table shows.
+		expect(md).toContain('<sub>prod for reference: LCP 2.02 s, FCP 1.71 s</sub>')
 		expect(md).not.toMatch(/faster|slower/)
-		expect(md).toContain('prod is for reference and never affects the result')
+		expect(md.match(/\| Metric \| main \| this PR \| Change \|\n/g)).toHaveLength(2)
 	})
 
-	it('drops the prod column without a prod URL and shows an absolute change from a zero base', () => {
+	it('has no prod line without a prod URL and shows an absolute change from a zero base', () => {
 		const md = render(SCENARIOS['missing-prod'])
 		expect(md).not.toMatch(/\bprod\b/)
 		// No percent of a zero base.
@@ -373,22 +388,16 @@ describe('renderComment', () => {
 		expect(md).not.toContain('slip through')
 	})
 
-	it('ends the footer with one link to the action, and says so when the job fails on regressions', () => {
-		const md = render(SCENARIOS['one-regression'])
-		expect(md).toMatch(/ By \[Usero PR checks\]\(https:\/\/github\.com\/usero-feedback\/pr-checks\)\.<\/sub>\n$/)
-		expect(md.match(/Usero/g)).toHaveLength(1)
+	it('says in the footer when the job fails on regressions', () => {
 		const failing = render(SCENARIOS['one-regression'], { failOnRegression: true })
-		expect(failing).toContain('<sub>Fails the job on a regression.')
-		expect(failing).not.toContain('never fails the build')
+		expect(failing).toContain('<sub>Fails the job on a regression. [How this is measured]')
+		expect(failing).not.toContain('Report only')
 	})
 
-	it('counts prod loads on their own in the footer and in failures', () => {
+	it('counts prod loads on their own in failures', () => {
 		const result = scenario({})
 		result.pages[0].failures.prod = ['HTTP 503']
-		const md = render(result)
-		expect(md).toContain('Medians of 8 cold mobile loads per side (3 on prod), interleaved,')
-		expect(md).toContain('- `/`: prod failed 1 of 3 loads (HTTP 503).')
-		expect(render(SCENARIOS['missing-prod'])).toContain('Medians of 8 cold mobile loads per side, interleaved,')
+		expect(render(result)).toContain('- `/`: prod failed 1 of 3 loads (HTTP 503).')
 	})
 
 	it('judges LCP and FCP from the first byte, so a slow preview server neither hides nor fakes a change', () => {
@@ -411,10 +420,11 @@ describe('renderComment', () => {
 		const md = render(build({ prodUrl: null, pages: [{ path: '/', loads: { base: side(1500, 3900), head: side(150, 4200) }, failures: {} }] }))
 		// Raw LCP fell 1.05 s, yet the line says slower: it reports the time after the first byte.
 		expect(md).toMatch(/^- LCP {2}\/ {2}300 ms slower \(8%\)$/m)
-		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%) |')
-		expect(md).toContain('For LCP and FCP, Change is the time after the first byte')
-		// LCP and FCP regressed; the 1.35 s faster first byte of the page loads counts nowhere.
-		expect(md).toContain('### Lab web vitals: 2 regressions vs main\n')
+		// The row says why the medians and the change disagree.
+		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%) |\n\n<sub>First byte −1.35 s, left out of LCP</sub>')
+		// FCP here is LCP, so one regression; the 1.35 s faster first byte of the page loads counts nowhere.
+		expect(md).toContain('### Lab web vitals: 1 regression vs main\n')
+		expect(md).not.toContain('| FCP |')
 		expect(md).not.toMatch(/\| TTFB \||server responded/)
 	})
 
@@ -442,8 +452,12 @@ describe('renderComment', () => {
 		const md = render(SCENARIOS['slow-preview-server'])
 		// The page loads saw a 314 ms slower first byte on `/`; warm requests found the servers equal.
 		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
-		expect(md).toContain('| LCP | 5.14 s | 5.46 s | +10 ms (0%) | 4.05 s |')
-		expect(md).toContain('| Server | 150 ms | 150 ms | 0 ms | n/a |')
+		// One note under the table explains why the medians are 320 ms apart while Change is 10 ms.
+		expect(md).toContain('| LCP | 5.14 s | 5.46 s | +10 ms |')
+		expect(md).toContain('| FCP | 3.40 s | 3.72 s | +10 ms |')
+		expect(md).toContain('| Server | 150 ms | 150 ms | 0 ms |\n\n<sub>First byte +312 ms, left out of LCP and FCP<br>prod for reference:')
+		// On /docs the first byte did not move past the floor, so no note.
+		expect(md.match(/First byte/g)).toHaveLength(1)
 		expect(md).not.toMatch(/\| TTFB \||server responded|usually not the code/)
 	})
 
@@ -461,10 +475,24 @@ describe('renderComment', () => {
 		expect(server?.base).toHaveLength(28)
 		const md = render(result)
 		expect(md).toContain('### Lab web vitals: 1 regression vs main\n\n```diff\n- Server  /  300 ms slower (300%)\n```\n')
-		expect(md).toMatch(/^\| Server \| 100 ms \| 400 ms \| \*\*Slower\*\* \+300 ms \(\+300%\)<br><sub>db 12 ms to 312 ms, 3 to 4 queries<\/sub> \| n\/a \|$/m)
-		expect(md).toContain('| Cold start | 1.63 s, 2 of 43 | none, 0 of 43 | not judged | n/a |')
-		expect(md).toContain('Server time from 30 warm requests per side, unthrottled, after 10 on new connections to catch cold starts.')
+		expect(md).toContain(
+			'| Server | 100 ms | 400 ms | **Slower** +300 ms (+300%) |',
+		)
+		expect(md).toContain(
+			'<sub>Server db 12 ms to 312 ms, 3 to 4 queries<br>Cold starts 1.63 s to none (2 and 0 of 43), not judged<br>prod for reference:',
+		)
 		expect(countVerdicts(result)).toEqual({ regressions: 1, improvements: 0 })
+	})
+
+	it('shows database time only under a judged Server change on a page that queries', () => {
+		// The clean run's `/` sends db 12 ms and 3 queries, unchanged.
+		expect(render(SCENARIOS.clean)).not.toContain('queries')
+		const noQueries = scenario({
+			server: { '/': serverSamples({ ms: 120, db: 0, queries: 0 }, { ms: 420, db: 0, queries: 0 }), '/docs': serverSamples({ ms: 60 }) },
+		})
+		const md = render(noQueries)
+		expect(md).toContain('- Server  /  300 ms slower')
+		expect(md).not.toContain('queries')
 	})
 
 	it('reports cold starts the server marked, from every phase, without judging them', () => {
@@ -478,13 +506,14 @@ describe('renderComment', () => {
 		expect(server?.summary.verdict).toBe('no-change')
 		const md = render(result)
 		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
-		expect(md).toMatch(/^\| Cold start \| 1\.0\d s, 4 of 43 \| 1\.5\d s, 2 of 43 \| \+\d+ ms, not judged \| n\/a \|$/m)
-		expect(md).toContain('Server bundle: 33.8 MB on main, 35.1 MB on this PR (+1.30 MB, +3.8%). A larger bundle makes cold starts slower.')
+		expect(md).toMatch(/^\| Server \| 120 ms \| 120 ms \| 0 ms \|\n\n<sub>Cold starts 1\.0\d s to 1\.5\d s \(4 and 2 of 43\), not judged<br>/m)
+		expect(md).toContain('Server bundle 33.8 MB to 35.1 MB (+1.30 MB, +3.8%), not judged.')
 	})
 
 	it('says when only one bundle size was given, and leaves the line out without either', () => {
 		const one = render(build({ prodUrl: null, bundle: { base: null, head: 912_400 } }))
-		expect(one).toContain('Server bundle: 912 KB on this PR, the other side')
+		expect(one).toContain("Server bundle 912 KB on this PR, main's size not given.")
+		expect(render(build({ prodUrl: null, bundle: { base: 912_400, head: 912_400 } }))).toContain('Server bundle 912 KB, no change.')
 		expect(render(build({ prodUrl: null, bundle: { base: null, head: null } }))).not.toContain('Server bundle')
 	})
 
@@ -527,8 +556,8 @@ describe('renderComment', () => {
 		expect(lcp?.head).toEqual([1000, 1005, 995])
 	})
 
-	it('shows a change that rounds to zero without a sign', () => {
-		const load = (cls: number): Metrics => ({ FCP: 1000, LCP: 1000, CLS: cls, TTFB: 100, TBT: 0 })
+	it('shows a change that rounds to zero without a sign, and leaves out a row that reads zero on both sides', () => {
+		const load = (cls: number, i: number): Metrics => ({ FCP: 500, LCP: 1000 + (cls > 0.0002 ? 0.3 : 0) + i, CLS: cls, TTFB: 100, TBT: 0 })
 		const pages: PageInput[] = [
 			{
 				path: '/',
@@ -537,8 +566,8 @@ describe('renderComment', () => {
 			},
 		]
 		const md = render(build({ prodUrl: null, pages }))
-		expect(md).toContain('| CLS | 0.000 | 0.000 | 0.000 |')
-		expect(md).not.toContain('−0.000')
+		expect(md).toContain('| LCP | 1.00 s | 1.00 s | 0 ms |')
+		expect(md).not.toMatch(/\| (CLS|TBT) \||−0/)
 	})
 })
 

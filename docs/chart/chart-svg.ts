@@ -32,9 +32,10 @@ export const FONT = "'Atkinson Hyperlegible', sans-serif"
 
 const PLOT_TOP = 70
 const PLOT_BOTTOM = 172
-const GRID_LEFT = 64
+// Tick labels end at GRID_LEFT - 8, so the widest (about 53 px, "800 ms") starts at x 21, in line with the title.
+const GRID_LEFT = 82
 const GRID_RIGHT = 500
-const MAIN_LEFT = 72
+const MAIN_LEFT = 90
 const MAIN_RIGHT = 400
 const PR_X = 462
 const BOTTOM_LABEL_Y = 222
@@ -75,10 +76,29 @@ function value(metric: Metric, v: number): string {
 	return v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${Math.round(v)} ms`
 }
 
-function niceStep(raw: number): number {
-	const power = 10 ** Math.floor(Math.log10(raw))
-	const steps = [1, 2, 2.5, 5, 10]
-	return (steps.find(s => s * power >= raw) ?? 10) * power
+const NICE = [1, 2, 2.5, 5]
+// Gridline counts by preference: three, then two, then four.
+const LINES_RANK: Record<number, number> = { 3: 0, 2: 1, 4: 2 }
+
+function ticksFor(lo: number, hi: number, step: number): number[] {
+	const ticks: number[] = []
+	for (let t = Math.ceil(lo / step - 1e-9) * step; t <= hi + 1e-9; t += step) ticks.push(Number(t.toPrecision(10)))
+	return ticks
+}
+
+// The nice step (1, 2, 2.5 or 5 x 10^n) giving two to four gridlines, three when it can; the larger step on a tie.
+export function niceStep(lo: number, hi: number): number {
+	const power = Math.floor(Math.log10(hi - lo))
+	let best = { step: 10 ** power, rank: Number.POSITIVE_INFINITY }
+	for (const exp of [power - 1, power]) {
+		for (const s of NICE) {
+			const step = s * 10 ** exp
+			if ((hi - lo) / step > 5) continue
+			const rank = LINES_RANK[ticksFor(lo, hi, step).length] ?? Number.POSITIVE_INFINITY
+			if (rank < best.rank || (rank === best.rank && step > best.step)) best = { step, rank }
+		}
+	}
+	return best.step
 }
 
 const decimals = (x: number): number => {
@@ -109,10 +129,8 @@ export function yScale(metric: Metric, values: number[], typical: number): Scale
 	const pad = span * 0.12
 	lo = Math.max(0, lo - pad)
 	const hi = hi0 + pad
-	const step = niceStep((hi - lo) / 3)
-	const ticks: number[] = []
-	for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-9; t += step) ticks.push(Number(t.toPrecision(10)))
-	return { lo, hi, ticks, step }
+	const step = niceStep(lo, hi)
+	return { lo, hi, ticks: ticksFor(lo, hi, step), step }
 }
 
 const esc = (s: string): string => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')

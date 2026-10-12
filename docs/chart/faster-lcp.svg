@@ -1,19 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="520" height="240" viewBox="0 0 520 240" font-family="'Atkinson Hyperlegible', sans-serif">
   <rect x="0.75" y="0.75" width="518.5" height="238.5" rx="12" fill="#FFFFFF" stroke="#E4E6E3" stroke-width="1.5"/>
   <rect x="432" y="56" width="60" height="174" rx="8" fill="#FFF1EB"/>
-  <line x1="64" x2="500" y1="166.6" y2="166.6" stroke="#E4E6E3" stroke-width="1"/>
-  <text x="56" y="171.6" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">2.0 s</text>
-  <line x1="64" x2="500" y1="132.2" y2="132.2" stroke="#E4E6E3" stroke-width="1"/>
-  <text x="56" y="137.2" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">2.2 s</text>
-  <line x1="64" x2="500" y1="97.8" y2="97.8" stroke="#E4E6E3" stroke-width="1"/>
-  <text x="56" y="102.8" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">2.4 s</text>
+  <line x1="82" x2="500" y1="166.6" y2="166.6" stroke="#E4E6E3" stroke-width="1"/>
+  <text x="74" y="171.6" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">2.00 s</text>
+  <line x1="82" x2="500" y1="123.6" y2="123.6" stroke="#E4E6E3" stroke-width="1"/>
+  <text x="74" y="128.6" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">2.25 s</text>
+  <line x1="82" x2="500" y1="80.6" y2="80.6" stroke="#E4E6E3" stroke-width="1"/>
+  <text x="74" y="85.6" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">2.50 s</text>
   <text x="20" y="38" font-size="20" font-weight="700" fill="#0D2433" text-anchor="start">LCP on /pricing</text>
-  <path d="M72 142.5 L89.3 133.9 L106.5 147.7 L123.8 121.9 L141.1 132.2 L158.3 113.3 L175.6 118.4 L192.8 104.7 L210.1 109.8 L227.4 97.8 L244.6 101.2 L261.9 90.9 L279.2 99.5 L296.4 87.4 L313.7 96 L330.9 82.3 L348.2 89.2 L365.5 92.6 L382.7 80.6 L400 85.7" fill="none" stroke="#0D2433" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M90 142.5 L106.3 133.9 L122.6 147.7 L138.9 121.9 L155.3 132.2 L171.6 113.3 L187.9 118.4 L204.2 104.7 L220.5 109.8 L236.8 97.8 L253.2 101.2 L269.5 90.9 L285.8 99.5 L302.1 87.4 L318.4 96 L334.7 82.3 L351.1 89.2 L367.4 92.6 L383.7 80.6 L400 85.7" fill="none" stroke="#0D2433" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>
   <line x1="400" y1="85.7" x2="462" y2="161.4" stroke="#FF5A1F" stroke-width="1.5" stroke-dasharray="3 4" stroke-linecap="round"/>
   <circle cx="462" cy="161.4" r="7" fill="#FF5A1F" stroke="#FFFFFF" stroke-width="2.5"/>
   <text x="462" y="187.4" font-size="17" font-weight="700" fill="#0D2433" text-anchor="middle" stroke="#FFF1EB" stroke-width="4" stroke-linejoin="round" paint-order="stroke">2.03 s</text>
   <circle cx="400" cy="85.7" r="4" fill="#0D2433"/>
   <text x="400" y="71.7" font-size="17" font-weight="400" fill="#0D2433" text-anchor="middle" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" paint-order="stroke">2.47 s</text>
-  <text x="72" y="222" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="start">main, last 20 runs</text>
+  <text x="90" y="222" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="start">main, last 20 runs</text>
   <text x="462" y="222" font-size="15" font-weight="700" fill="#0D2433" text-anchor="middle">this PR</text>
 </svg>

@@ -1,17 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="520" height="240" viewBox="0 0 520 240" font-family="'Atkinson Hyperlegible', sans-serif">
   <rect x="0.75" y="0.75" width="518.5" height="238.5" rx="12" fill="#FFFFFF" stroke="#E4E6E3" stroke-width="1.5"/>
   <rect x="432" y="56" width="60" height="174" rx="8" fill="#FFF1EB"/>
-  <line x1="64" x2="500" y1="145.7" y2="145.7" stroke="#E4E6E3" stroke-width="1"/>
-  <text x="56" y="150.7" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">50 ms</text>
-  <line x1="64" x2="500" y1="104.5" y2="104.5" stroke="#E4E6E3" stroke-width="1"/>
-  <text x="56" y="109.5" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">100 ms</text>
+  <line x1="82" x2="500" y1="145.7" y2="145.7" stroke="#E4E6E3" stroke-width="1"/>
+  <text x="74" y="150.7" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">50 ms</text>
+  <line x1="82" x2="500" y1="104.5" y2="104.5" stroke="#E4E6E3" stroke-width="1"/>
+  <text x="74" y="109.5" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="end">100 ms</text>
   <text x="20" y="38" font-size="20" font-weight="700" fill="#0D2433" text-anchor="start">TBT on /checkout/shipping-and-deli...</text>
-  <path d="M72 153.9 L181.3 137.5 L290.7 145.7 L400 145.7" fill="none" stroke="#0D2433" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M90 153.9 L193.3 137.5 L296.7 145.7 L400 145.7" fill="none" stroke="#0D2433" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>
   <line x1="400" y1="145.7" x2="462" y2="88.1" stroke="#FF5A1F" stroke-width="1.5" stroke-dasharray="3 4" stroke-linecap="round"/>
   <circle cx="462" cy="88.1" r="7" fill="#FF5A1F" stroke="#FFFFFF" stroke-width="2.5"/>
   <text x="462" y="74.1" font-size="17" font-weight="700" fill="#0D2433" text-anchor="middle" stroke="#FFF1EB" stroke-width="4" stroke-linejoin="round" paint-order="stroke">120 ms</text>
   <circle cx="400" cy="145.7" r="4" fill="#0D2433"/>
   <text x="400" y="171.7" font-size="17" font-weight="400" fill="#0D2433" text-anchor="middle" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" paint-order="stroke">50 ms</text>
-  <text x="72" y="222" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="start">main, last 4 runs</text>
+  <text x="90" y="222" font-size="15" font-weight="400" fill="#5F6D78" text-anchor="start">main, last 4 runs</text>
   <text x="462" y="222" font-size="15" font-weight="700" fill="#0D2433" text-anchor="middle">this PR</text>
 </svg>

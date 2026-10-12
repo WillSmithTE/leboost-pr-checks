@@ -23,9 +23,9 @@ it as is and add only the rasteriser.
   bridged by a faint dotted line, so it reads as missing data rather than a glitch.
 - **This PR as one orange dot** in its own tinted column to the right, joined to main's latest point by a dashed orange
   line. The step from the line to the dot is the whole story; the y labels give the scale.
-- **Where the comment puts it:** under the `diff` summary, one chart per page with a significant change (its first flagged
-  metric, regressions first), three at most. A quiet run gets one LCP chart on the first page, inside the folded table, so the
-  comment stays short.
+- **Where the comment puts it:** first inside the fold (open whenever something changed), one chart per page with a
+  significant change (its first flagged metric, regressions first), three at most. A quiet run has no chart: there is no
+  step to show, and a notification email shows the fold's content anyway.
 - **No health bands.** Google's good / needs improvement / poor thresholds (LCP 2.5 s and 4 s) are defined on real-user p75
   field data. This is a median of throttled lab loads on Slow 4G with a 4x slower CPU, which runs well above typical field
   values. A band would call most pages "poor" for reasons unrelated to the PR and pull the eye from the one question the chart
@@ -83,10 +83,10 @@ Text never uses `dominant-baseline` (resvg support is partial); baselines are ex
 | Text                     | Position                         | Size, weight, colour       |
 | ------------------------ | -------------------------------- | -------------------------- |
 | "LCP on /pricing"        | x 20, baseline 38                | 20, 700, ink               |
-| Tick labels              | right-aligned at x 56, tick y + 5 | 15, 400, muted             |
+| Tick labels              | right-aligned at x 74, tick y + 5 | 15, 400, muted             |
 | main's latest value      | centred on its point, 14 above or 26 below | 17, 400, ink, 4 px card halo |
 | This PR's value          | centred on the dot, opposite side to main's label | 17, 700, ink, 4 px band halo |
-| "main, last 20 runs"     | x 72, baseline 222               | 15, 400, muted             |
+| "main, last 20 runs"     | x 90, baseline 222               | 15, 400, muted             |
 | "this PR"                | centred x 462, baseline 222      | 15, 700, ink               |
 
 The PR label goes above its dot when the PR is at or above main's latest value, main's label below its point, and the other
@@ -95,14 +95,17 @@ below, CLS to three decimals.
 
 **Geometry.**
 
-- Plot area y 70 (top) to 172 (bottom). Gridlines from x 64 to 500.
-- main's points evenly spaced from x 72 to 400; line 2.25 px, round joins and caps; latest point a dot r 4.
+- Plot area y 70 (top) to 172 (bottom). Gridlines from x 82 to 500. The widest tick label (`800 ms`, about 53 px) then
+  starts near x 21, in line with the title, instead of touching the card's edge.
+- main's points evenly spaced from x 90 to 400; line 2.25 px, round joins and caps; latest point a dot r 4.
 - This PR at x 462: column 60 wide, from y 56 to 230, radius 8, `band` fill. Dot r 7, `accent` fill, 2.5 px white stroke.
   Connector from main's latest point, 1.5 px, dash 3 4.
 
 **Y scale.** Domain covers main's values and this PR's. Its span is at least the larger of a per-metric minimum (LCP and FCP
 200 ms, TTFB, Server and TBT 100 ms, INP 50 ms, CLS 0.05) and 20% of main's median, so run-to-run noise draws as a wobble instead of a
-cliff; then 12% padding each side, floored at 0. Gridlines at a nice step (1, 2, 2.5 or 5 x 10^n) giving two to four lines.
+cliff; then 12% padding each side, floored at 0. Gridlines at the nice step (1, 2, 2.5 or 5 x 10^n) that gives three lines,
+else two, else four, never one or five (the larger step on a tie). Dividing the range by three and rounding up, as v1 first
+did, could leave a single line.
 Tick labels in seconds once any tick reaches 1000 ms, with as many decimals as the step needs (`2.5 s`, `2.25 s`).
 
 ## Serving

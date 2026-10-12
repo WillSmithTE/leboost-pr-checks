@@ -61717,7 +61717,7 @@ var FLOORS = {
   LCP: { absFloor: 100, relFloor: 0.05 },
   FCP: { absFloor: 100, relFloor: 0.05 },
   TTFB: { absFloor: 100, relFloor: 0.25 },
-  Server: { absFloor: 50, relFloor: 0.1 },
+  Server: { absFloor: 75, relFloor: 0.1 },
   TBT: { absFloor: 50, relFloor: 0.2 },
   INP: { absFloor: 25, relFloor: 0.2 },
   CLS: { absFloor: 0.01, relFloor: 0 }
@@ -62431,9 +62431,9 @@ function summariseServer(samples, alpha, floor = FLOORS.Server) {
   const good = (side) => side.filter((s) => s !== null);
   const first = { base: good(samples.first?.base ?? []), head: good(samples.first?.head ?? []) };
   const measured = { base: good(samples.base), head: good(samples.head) };
-  const marked = [...first.base, ...first.head, ...measured.base, ...measured.head].some((s) => s.isolate !== null);
+  const marked = (side) => [...first[side], ...measured[side]].some((s) => s.isolate !== null);
   const split = (side) => {
-    if (marked) {
+    if (marked(side)) {
       return {
         warm: measured[side].filter((s) => s.isolate !== "cold"),
         cold: [...first[side], ...measured[side]].filter((s) => s.isolate === "cold").map((s) => s.ttfb)
@@ -62468,7 +62468,7 @@ function summariseServer(samples, alpha, floor = FLOORS.Server) {
       db: medianPair(b.warm, h.warm, "db"),
       queries: medianPair(b.warm, h.warm, "queries"),
       coldStarts: {
-        source: marked ? "isolate" : "outliers",
+        source: { base: marked("base") ? "isolate" : "outliers", head: marked("head") ? "isolate" : "outliers" },
         base: b.cold,
         head: h.cold,
         requests: { base: first.base.length + measured.base.length, head: first.head.length + measured.head.length }

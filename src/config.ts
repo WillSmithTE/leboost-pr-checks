@@ -52,7 +52,7 @@ export const FLOORS: Record<MetricName, Floor> = {
 	LCP: { absFloor: 100, relFloor: 0.05 },
 	FCP: { absFloor: 100, relFloor: 0.05 },
 	TTFB: { absFloor: 100, relFloor: 0.25 },
-	Server: { absFloor: 50, relFloor: 0.1 },
+	Server: { absFloor: 75, relFloor: 0.1 },
 	TBT: { absFloor: 50, relFloor: 0.2 },
 	INP: { absFloor: 25, relFloor: 0.2 },
 	CLS: { absFloor: 0.01, relFloor: 0 },

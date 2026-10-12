@@ -54,8 +54,8 @@ export interface ServerDetail {
 
 // Requests that reached a cold server instance, from every phase, reported but never judged.
 export interface ColdStarts {
-	// isolate: the server said so in Server-Timing; outliers: first byte past the cold limit (COLD in config.ts).
-	source: 'isolate' | 'outliers'
+	// Per side. isolate: the server said so in Server-Timing; outliers: first byte past the cold limit (COLD in config.ts).
+	source: { base: 'isolate' | 'outliers'; head: 'isolate' | 'outliers' }
 	// First-byte times of the cold requests.
 	base: number[]
 	head: number[]
@@ -257,10 +257,10 @@ export function summariseServer(samples: ServerSamples, alpha: number, floor: Fl
 	const good = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
 	const first = { base: good(samples.first?.base ?? []), head: good(samples.first?.head ?? []) }
 	const measured = { base: good(samples.base), head: good(samples.head) }
-	// With the isolate marker on any request, the server's word decides what was cold; without it, the first byte does.
-	const marked = [...first.base, ...first.head, ...measured.base, ...measured.head].some(s => s.isolate !== null)
+	// Per side, since main may not send the marker yet: with it the server's word decides what was cold, without it the first byte.
+	const marked = (side: 'base' | 'head'): boolean => [...first[side], ...measured[side]].some(s => s.isolate !== null)
 	const split = (side: 'base' | 'head'): { warm: ServerSample[]; cold: number[] } => {
-		if (marked) {
+		if (marked(side)) {
 			return {
 				warm: measured[side].filter(s => s.isolate !== 'cold'),
 				cold: [...first[side], ...measured[side]].filter(s => s.isolate === 'cold').map(s => s.ttfb),
@@ -297,7 +297,7 @@ export function summariseServer(samples: ServerSamples, alpha: number, floor: Fl
 			db: medianPair(b.warm, h.warm, 'db'),
 			queries: medianPair(b.warm, h.warm, 'queries'),
 			coldStarts: {
-				source: marked ? 'isolate' : 'outliers',
+				source: { base: marked('base') ? 'isolate' : 'outliers', head: marked('head') ? 'isolate' : 'outliers' },
 				base: b.cold,
 				head: h.cold,
 				requests: { base: first.base.length + measured.base.length, head: first.head.length + measured.head.length },

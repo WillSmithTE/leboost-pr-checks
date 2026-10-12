@@ -455,7 +455,7 @@ describe('renderComment', () => {
 			source: 'server-timing',
 			db: { baseMedian: 12, headMedian: 312 },
 			queries: { baseMedian: 3, headMedian: 4 },
-			coldStarts: { source: 'outliers', base: [1623, 1632], head: [], requests: { base: 43, head: 43 } },
+			coldStarts: { source: { base: 'outliers', head: 'outliers' }, base: [1623, 1632], head: [], requests: { base: 43, head: 43 } },
 		})
 		// The two cold requests are left out of the test and the medians.
 		expect(server?.base).toHaveLength(28)
@@ -470,7 +470,7 @@ describe('renderComment', () => {
 	it('reports cold starts the server marked, from every phase, without judging them', () => {
 		const result = SCENARIOS['cold-starts']
 		const server = result.pages[0].metrics.Server
-		expect(server?.server?.coldStarts.source).toBe('isolate')
+		expect(server?.server?.coldStarts.source).toEqual({ base: 'isolate', head: 'isolate' })
 		expect(server?.server?.coldStarts.base).toHaveLength(4)
 		expect(server?.server?.coldStarts.head).toHaveLength(2)
 		// The marked cold request among the measured ones is left out of the warm test.

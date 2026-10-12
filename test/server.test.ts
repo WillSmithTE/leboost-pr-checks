@@ -150,8 +150,8 @@ describe('summariseServer', () => {
 		const result = summariseServer({ base: side(around(120), true), head: side(around(220, 3), true), failures: noFailures }, 0.05)
 		expect(result?.server?.source).toBe('server-timing')
 		expect(result?.summary).toMatchObject({ verdict: 'regressed', baseMedian: 90, headMedian: 190 })
-		// The floor is 50 ms or 10% of main's median, whichever is larger.
-		expect(result?.summary.floor).toBe(50)
+		// The floor is 75 ms or 10% of main's median, whichever is larger.
+		expect(result?.summary.floor).toBe(75)
 	})
 
 	it('falls back to the first byte when any request lacks a total', () => {
@@ -168,7 +168,12 @@ describe('summariseServer', () => {
 		base[9] = 2400
 		const first = { base: side([2200, 130, 125]), head: side([140, 1800, 120]) }
 		const result = summariseServer({ base: side(base), head: side(around(120, 3)), failures: noFailures, first }, 0.05)
-		expect(result?.server?.coldStarts).toEqual({ source: 'outliers', base: [2200, 1900, 2400], head: [1800], requests: { base: 33, head: 33 } })
+		expect(result?.server?.coldStarts).toEqual({
+			source: { base: 'outliers', head: 'outliers' },
+			base: [2200, 1900, 2400],
+			head: [1800],
+			requests: { base: 33, head: 33 },
+		})
 		expect(result?.base).toHaveLength(28)
 		expect(result?.summary.verdict).toBe('no-change')
 	})
@@ -180,10 +185,20 @@ describe('summariseServer', () => {
 		const base = mark(around(120), [0, 3, 6, 9, 12, 15])
 		const first = { base: mark([900, 880, 125], [0, 1]), head: mark([1400, 130, 125], [0]) }
 		const result = summariseServer({ base, head: mark(around(120, 3), []), failures: noFailures, first }, 0.05)
-		expect(result?.server?.coldStarts.source).toBe('isolate')
+		expect(result?.server?.coldStarts.source).toEqual({ base: 'isolate', head: 'isolate' })
 		expect(result?.server?.coldStarts.base).toHaveLength(8)
 		expect(result?.server?.coldStarts.head).toEqual([1400])
 		expect(result?.base).toHaveLength(24)
+	})
+
+	it('decides per side, so a main that does not send the marker yet still gets its slow requests counted as cold', () => {
+		const head: ServerLoad[] = around(80, 3).map(v => ({ ...sample(v), isolate: 'warm' }))
+		const firstHead: ServerLoad[] = [{ ...sample(1600), isolate: 'cold' }, { ...sample(170), isolate: 'warm' }]
+		const base = around(120)
+		base[5] = 2100
+		const result = summariseServer({ base: side(base), head, failures: noFailures, first: { base: side([1900, 300]), head: firstHead } }, 0.05)
+		expect(result?.server?.coldStarts).toMatchObject({ source: { base: 'outliers', head: 'isolate' }, base: [1900, 2100], head: [1600] })
+		expect(result?.base).toHaveLength(29)
 	})
 
 	it('needs 3 good requests per side', () => {

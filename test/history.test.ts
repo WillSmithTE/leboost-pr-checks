@@ -192,6 +192,7 @@ const result = (pages: RunResult['pages']): RunResult => ({
 	ciRunUrl: null,
 	config: { pairs: 8, serverRequests: 30, device: 'mobile', latencyMs: 150, downloadKbps: 1638.4, uploadKbps: 750, cpuSlowdown: 4 },
 	pages,
+	bundle: null,
 	meta: { alpha: 0.05, prodLoads: null, durationMs: null, generatedAt: null },
 })
 

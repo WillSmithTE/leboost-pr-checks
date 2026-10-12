@@ -1,6 +1,7 @@
 // Action inputs, parsed and validated. Every error message names the input so a first setup is easy to fix.
 import { CHART_BASE_URL } from './chart'
 import { DEFAULT_SERVER_SAMPLES, DEVICES, type DeviceName } from './config'
+import type { BundleSizes } from './report'
 import type { PageSpec } from './run'
 
 export class InputError extends Error {}
@@ -20,6 +21,7 @@ export interface Inputs {
 	failOnRegression: boolean
 	prNumber: number | null
 	chartBaseUrl: string
+	bundle: BundleSizes
 }
 
 export type GetInput = (name: string) => string
@@ -65,6 +67,12 @@ function serverSamples(raw: string): number {
 		throw new InputError(`server-samples must be 0 (off) or a whole number from ${MIN_SERVER_SAMPLES} to ${MAX_SERVER_SAMPLES}, got "${raw}".`)
 	}
 	return n
+}
+
+// Empty is "not given": a CI step that could not read the size passes nothing.
+function bytes(name: string, raw: string): number | null {
+	if (raw === '') return null
+	return int(name, raw, { min: 0, max: Number.MAX_SAFE_INTEGER })
 }
 
 function parseHeaders(raw: string): Record<string, string> {
@@ -126,5 +134,6 @@ export function parseInputs(get: GetInput): Inputs {
 		failOnRegression: bool('fail-on-regression', input('fail-on-regression'), false),
 		prNumber: prRaw ? int('pr-number', prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null,
 		chartBaseUrl: url('chart-base-url', input('chart-base-url', CHART_BASE_URL)),
+		bundle: { base: bytes('base-bundle-bytes', input('base-bundle-bytes')), head: bytes('head-bundle-bytes', input('head-bundle-bytes')) },
 	}
 }

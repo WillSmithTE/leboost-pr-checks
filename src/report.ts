@@ -1,5 +1,16 @@
 // Turns raw samples into the result document and the PR comment.
-import { COLD, CONTEXT_ONLY, type DeviceName, FLOORS, type Floor, FROM_FIRST_BYTE, LOAD_METRICS, METRICS, type MetricName } from './config'
+import {
+	COLD,
+	CONTEXT_ONLY,
+	type DeviceName,
+	FLOORS,
+	type Floor,
+	FROM_FIRST_BYTE,
+	LOAD_METRICS,
+	METRICS,
+	type MetricName,
+	SERVER_NEW_CONNECTIONS,
+} from './config'
 import type { Load, PageSamples, SideName } from './run'
 import { chartImage, type History } from './chart'
 import type { ServerLoad, ServerSample, ServerSamples } from './server'
@@ -37,9 +48,19 @@ export interface ServerDetail {
 	source: 'server-timing' | 'ttfb'
 	db: MedianPair | null
 	queries: MedianPair | null
-	// Cold outliers left out of the test (see COLD in config.ts).
-	cold: { base: number[]; head: number[] }
-	requests: { base: ServerLoad[]; head: ServerLoad[] }
+	coldStarts: ColdStarts
+	requests: { base: ServerLoad[]; head: ServerLoad[]; first: { base: ServerLoad[]; head: ServerLoad[] } }
+}
+
+// Requests that reached a cold server instance, from every phase, reported but never judged.
+export interface ColdStarts {
+	// isolate: the server said so in Server-Timing; outliers: first byte past the cold limit (COLD in config.ts).
+	source: 'isolate' | 'outliers'
+	// First-byte times of the cold requests.
+	base: number[]
+	head: number[]
+	// Good requests per side, every phase.
+	requests: { base: number; head: number }
 }
 
 export interface MetricResult {
@@ -90,9 +111,16 @@ export interface RunMeta {
 	config: RunConfig
 }
 
+// Server bundle size in bytes per side, from the base-bundle-bytes and head-bundle-bytes inputs; null when not given.
+export interface BundleSizes {
+	base: number | null
+	head: number | null
+}
+
 export interface RunResult extends RunMeta {
 	version: 1
 	pages: PageResult[]
+	bundle: BundleSizes | null
 	meta: {
 		alpha: number
 		prodLoads: number | null
@@ -227,31 +255,54 @@ function medianPair(base: readonly ServerSample[], head: readonly ServerSample[]
 // The Server metric from the server time requests, or null when either side has fewer than 3 good ones.
 export function summariseServer(samples: ServerSamples, alpha: number, floor: Floor = FLOORS.Server): MetricResult | null {
 	const good = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
-	const base = good(samples.base)
-	const head = good(samples.head)
-	if (base.length < MIN_SAMPLES || head.length < MIN_SAMPLES) return null
-	// One test never mixes Server-Timing totals with first bytes.
-	const source = [...base, ...head].every(s => s.total !== null) ? 'server-timing' : 'ttfb'
-	const split = (side: readonly ServerSample[]): { kept: number[]; cold: number[] } => {
-		const values = side.map(s => (source === 'server-timing' && s.total !== null ? s.total : s.ttfb))
-		const limit = coldLimit(values)
-		return limit === null ? { kept: values, cold: [] } : { kept: values.filter(v => v <= limit), cold: values.filter(v => v > limit) }
+	const first = { base: good(samples.first?.base ?? []), head: good(samples.first?.head ?? []) }
+	const measured = { base: good(samples.base), head: good(samples.head) }
+	// With the isolate marker on any request, the server's word decides what was cold; without it, the first byte does.
+	const marked = [...first.base, ...first.head, ...measured.base, ...measured.head].some(s => s.isolate !== null)
+	const split = (side: 'base' | 'head'): { warm: ServerSample[]; cold: number[] } => {
+		if (marked) {
+			return {
+				warm: measured[side].filter(s => s.isolate !== 'cold'),
+				cold: [...first[side], ...measured[side]].filter(s => s.isolate === 'cold').map(s => s.ttfb),
+			}
+		}
+		const limit = coldLimit(measured[side].map(s => s.ttfb))
+		const warmMedian = median(measured[side].map(s => s.ttfb))
+		const firstLimit = warmMedian === null ? null : Math.max(COLD.factor * warmMedian, warmMedian + COLD.plusMs)
+		return {
+			warm: limit === null ? measured[side] : measured[side].filter(s => s.ttfb <= limit),
+			cold: [
+				...(firstLimit === null ? [] : first[side].filter(s => s.ttfb > firstLimit)),
+				...(limit === null ? [] : measured[side].filter(s => s.ttfb > limit)),
+			].map(s => s.ttfb),
+		}
 	}
-	const b = split(base)
-	const h = split(head)
-	const summary = summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false)
+	const b = split('base')
+	const h = split('head')
+	if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null
+	// One test never mixes Server-Timing totals with first bytes.
+	const source = [...b.warm, ...h.warm].every(s => s.total !== null) ? 'server-timing' : 'ttfb'
+	const value = (s: ServerSample): number => (source === 'server-timing' && s.total !== null ? s.total : s.ttfb)
+	const bKept = b.warm.map(value)
+	const hKept = h.warm.map(value)
+	const summary = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false)
 	// A percent of a base under the floor (a static server answering in 1 ms) means nothing.
 	if (summary.baseMedian < floor.absFloor) summary.deltaPct = null
 	return {
-		base: b.kept,
-		head: h.kept,
+		base: bKept,
+		head: hKept,
 		summary,
 		server: {
 			source,
-			db: medianPair(base, head, 'db'),
-			queries: medianPair(base, head, 'queries'),
-			cold: { base: b.cold, head: h.cold },
-			requests: { base: samples.base, head: samples.head },
+			db: medianPair(b.warm, h.warm, 'db'),
+			queries: medianPair(b.warm, h.warm, 'queries'),
+			coldStarts: {
+				source: marked ? 'isolate' : 'outliers',
+				base: b.cold,
+				head: h.cold,
+				requests: { base: first.base.length + measured.base.length, head: first.head.length + measured.head.length },
+			},
+			requests: { base: samples.base, head: samples.head, first: samples.first ?? { base: [], head: [] } },
 		},
 	}
 }
@@ -262,6 +313,7 @@ export interface BuildInput extends RunMeta {
 	prodLoads?: number | null
 	durationMs?: number | null
 	generatedAt?: string | null
+	bundle?: BundleSizes | null
 }
 
 export function buildResult({
@@ -270,10 +322,12 @@ export function buildResult({
 	prodLoads = null,
 	durationMs = null,
 	generatedAt = null,
+	bundle = null,
 	...meta
 }: BuildInput): RunResult {
 	return {
 		version: 1,
+		bundle: bundle && (bundle.base !== null || bundle.head !== null) ? bundle : null,
 		repo: meta.repo,
 		prNumber: meta.prNumber,
 		branch: meta.branch,
@@ -468,14 +522,46 @@ function serverGapLines(page: PageResult, requests: number): string[] {
 
 const queryCount = (v: number | null): string => (v === null ? 'n/a' : String(Math.round(v * 10) / 10))
 
-// Under the Server Change: database time and queries from Server-Timing, and cold requests left out of the test.
+// Under the Server Change: database time and queries from Server-Timing.
 function serverDetail(d: ServerDetail): string {
 	const parts: string[] = []
 	if (d.db) parts.push(`db ${formatValue('Server', d.db.baseMedian)} to ${formatValue('Server', d.db.headMedian)}`)
 	if (d.queries) parts.push(`${queryCount(d.queries.baseMedian)} to ${queryCount(d.queries.headMedian)} queries`)
-	const cold = d.cold.base.length + d.cold.head.length
-	if (cold > 0) parts.push(`${plural(cold, 'cold request')} left out`)
 	return parts.length > 0 ? `<br><sub>${parts.join(', ')}</sub>` : ''
+}
+
+// Cold starts, measured but never judged: too few land per run for a test. Null when neither side had one.
+function coldStartRow(c: ColdStarts, hasProd: boolean): string | null {
+	if (c.base.length === 0 && c.head.length === 0) return null
+	const side = (values: number[], requests: number): string =>
+		`${values.length > 0 ? formatValue('Server', median(values)) : 'none'}, ${values.length}${NBSP}of${NBSP}${requests}`
+	const b = median(c.base)
+	const h = median(c.head)
+	const change = b !== null && h !== null ? `${formatChange('Server', b, h, null)}, not judged` : 'not judged'
+	const cells = ['Cold start', side(c.base, c.requests.base), side(c.head, c.requests.head), change]
+	if (hasProd) cells.push('n/a')
+	return `| ${cells.join(' | ')} |`
+}
+
+export function formatBytes(bytes: number): string {
+	const abs = Math.abs(bytes)
+	if (abs >= 1e6) return `${(bytes / 1e6).toFixed(abs >= 1e7 ? 1 : 2)}${NBSP}MB`
+	if (abs >= 1e3) return `${Math.round(bytes / 1e3)}${NBSP}KB`
+	return `${Math.round(bytes)}${NBSP}B`
+}
+
+// The server bundle is what a cold start loads and evaluates, so its growth is the leading cold start regression.
+function bundleLine({ base, head }: BundleSizes): string {
+	if (base === null || head === null) {
+		const [size, side] = base === null ? [head, 'this PR'] : [base, 'main']
+		return `Server bundle: ${size === null ? 'n/a' : formatBytes(size)} on ${side}, the other side's size was not given. Not judged.`
+	}
+	const diff = head - base
+	const sign = diff > 0 ? '+' : MINUS
+	const parts = [diff === 0 ? 'no change' : `${sign}${formatBytes(Math.abs(diff))}`]
+	if (diff !== 0 && base > 0) parts.push(`${sign}${Math.abs((diff / base) * 100).toFixed(1)}%`)
+	const change = parts.join(', ')
+	return `Server bundle: ${formatBytes(base)} on main, ${formatBytes(head)} on this PR (${change}). A larger bundle makes cold starts slower. Not judged.`
 }
 
 // Five columns at most so it fits GitHub mobile; only significant rows get a word, in bold.
@@ -491,7 +577,8 @@ function pageTable(page: PageResult, hasProd: boolean): string[] {
 			const word = s.verdict === 'no-change' ? '' : `**${capitalise(directionWord(metric, s.verdict))}** `
 			const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${detail}`]
 			if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian))
-			return `| ${cells.join(' | ')} |`
+			const cold = m.server ? coldStartRow(m.server.coldStarts, hasProd) : null
+			return cold ? `| ${cells.join(' | ')} |\n${cold}` : `| ${cells.join(' | ')} |`
 		})
 	return [`**${code(page.path)}**`, '', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows]
 }
@@ -558,6 +645,7 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 		lines.push(`<details${regressed.length > 0 ? ' open' : ''}>`, '<summary>All metrics</summary>', '')
 		if (flags.length === 0) lines.push(...chartLines)
 		for (const page of pages) lines.push(...pageTable(page, hasProd), '')
+		if (result.bundle) lines.push(bundleLine(result.bundle), '')
 		const fromFirstByteMetrics = METRICS.filter(k => pages.some(p => p.metrics[k]?.summary.fromFirstByte))
 		if (fromFirstByteMetrics.length > 0) {
 			lines.push(
@@ -581,7 +669,11 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 		failOnRegression ? 'Fails the job on a regression.' : 'Report only, never fails the build.',
 		`Medians of ${config.pairs} cold ${config.device} loads per side${prodNote}, interleaved, at ${net}.`,
 	]
-	if (config.serverRequests > 0) footer.push(`Server time from ${config.serverRequests} warm requests per side, unthrottled.`)
+	if (config.serverRequests > 0) {
+		footer.push(
+			`Server time from ${config.serverRequests} warm requests per side, unthrottled, after ${SERVER_NEW_CONNECTIONS} on new connections to catch cold starts.`,
+		)
+	}
 	footer.push(
 		`A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`,
 	)

@@ -21,7 +21,13 @@ describe('parseInputs', () => {
 			failOnRegression: false,
 			prNumber: null,
 			chartBaseUrl: 'https://usero.io/pr-checks/chart.png',
+			bundle: { base: null, head: null },
 		})
+	})
+
+	it('reads bundle sizes in bytes, and an empty one as not given', () => {
+		expect(parse({ ...minimal, 'base-bundle-bytes': '33810000', 'head-bundle-bytes': ' ' }).bundle).toEqual({ base: 33810000, head: null })
+		expect(() => parse({ ...minimal, 'head-bundle-bytes': '7.2 MB' })).toThrow('head-bundle-bytes must be a whole number')
 	})
 
 	it('takes a chart server for testing and refuses one that is not a URL', () => {

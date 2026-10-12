@@ -75,6 +75,8 @@ image and a PR that changes nothing, with the comment this action posted on each
 | `comment`            | `true`                | Post or update the PR comment. The job summary is written either way.                                                                     |
 | `pr-number`          | from the event        | The PR to comment on. Found from the event or the commit; set it for `workflow_dispatch` runs.                                           |
 | `fail-on-regression` | `false`               | Fail the job when anything regressed.                                                                                                     |
+| `base-bundle-bytes`  |                       | main's server bundle size in bytes, shown with `head-bundle-bytes` as the change cold starts pay for. Never judged.                       |
+| `head-bundle-bytes`  |                       | This PR's server bundle size in bytes.                                                                                                   |
 | `chart-base-url`     | usero.io              | Where the trend chart images are drawn. Only for testing a chart server.                                                                 |
 
 | Output         | What it holds                                                                                              |
@@ -101,17 +103,26 @@ This run's main is the newest point. Runs on another device or base URL are neve
 
 ## Server time
 
-Before any page loads, the action sends plain GET requests (no browser, no throttling) to each path on main and the PR: 3
-warm-up requests per side that are thrown away, then `server-samples` (30) per side, alternating main and PR. The time is
-from sending the request to the first byte of the response, with connection setup left out, so it is the server's work
-plus one network round trip from the runner. The requests use the mobile browser's user agent and your `headers`.
+Before any page loads, the action sends plain GET requests (no browser, no throttling) to each path on main and the PR,
+alternating main and PR: 10 per side on a new connection each, 3 warm-up requests, then `server-samples` (30) per side on
+kept-alive connections. Those last ones are timed from sending the request to the first byte of the response, with
+connection setup left out, so it is the server's work plus one network round trip from the runner. The requests use the
+mobile browser's user agent and your `headers`.
+
+- **Cold starts are reported apart, not judged.** On serverless hosts a request that lands on a cold instance pays its
+  start-up (loading and evaluating the server bundle), and at low traffic that is most first visits. New connections are
+  the likeliest way to reach one, which is why they come first. A request counts as cold when the server says so in
+  `Server-Timing` (`isolate;desc=cold`, below), or without that marker when it is slower than 3x the side's warm median and
+  300 ms over it. The Cold start row shows each side's median cold first byte and how many requests were cold. A run
+  gets a handful at best, so it is measured, not judged, and cold requests never count in the Server row.
+- **Bundle size.** Pass `base-bundle-bytes` and `head-bundle-bytes` and the comment shows both and the change: a bigger
+  server bundle is the most common way a PR makes cold starts slower. Not judged.
 
 - **The Server row is judged** like LCP or TBT (the test is under [Method](#method)), so a PR that adds a slow query, an
   extra database round trip or slow rendering on the server gets a regression on its own line. LCP and FCP are judged from
   the first byte, so the same slowdown is never counted twice.
-- **Cold requests.** A request slower than 3x its side's median and 300 ms over it is a cold outlier (a cold isolate or
-  lambda). Up to 10% of a side's requests can be left out this way; the row says how many. More than that is how the server
-  behaves, so they stay in.
+- **Cold requests among the measured ones** are left out of the Server row's test. Without the marker, at most 10% of a
+  side's measured requests can be left out this way; more than that is how the server behaves, so they stay in.
 - **Why not the page loads' TTFB.** Each page load opens a fresh connection in a fresh browser context, and on serverless
   previews that first byte flips between about 0.1 s and 1.3 to 1.9 s for minutes at a time (most likely new connections
   landing on cold isolates). In A/A runs a verdict on it fired 63 to 73% of the time. Warm requests on kept-alive connections do not
@@ -120,10 +131,10 @@ plus one network round trip from the runner. The requests use the mobile browser
 ### Server-Timing (optional)
 
 If your server sends a [`Server-Timing`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Server-Timing) header
-on HTML responses, the action reads three things from it:
+on HTML responses, the action reads four things from it:
 
 ```
-Server-Timing: total;dur=182.4, db;dur=41.7;count=6
+Server-Timing: total;dur=182.4, db;dur=41.7;count=6, isolate;desc=warm
 ```
 
 | Metric             | Meaning                                                                                                     |
@@ -131,8 +142,10 @@ Server-Timing: total;dur=182.4, db;dur=41.7;count=6
 | `total;dur=<ms>`   | Time spent in your handler, up to the response headers. When every request on both sides has it, the Server row tests `total` instead of the first byte, which leaves the network out. |
 | `db;dur=<ms>`      | Database time. Shown under the Server row as main's and the PR's medians.                                   |
 | `db;count=<n>`     | Number of queries, shown next to it. Several `db` entries are summed, and without `count` each entry counts as one query. |
+| `isolate;desc=cold` or `warm` | `cold` on the first request a server instance (isolate, lambda, process) handles, `warm` after. Decides which requests go in the Cold start row. A module-level counter is enough. |
 
-Other metrics in the header are ignored. Only send `total` if it covers CPU time too: on Cloudflare Workers the clock stops
+Other metrics in the header are ignored, and a page without the header (a prerendered or static page) is measured from its
+first byte like any other. Only send `total` if it covers CPU time too: on Cloudflare Workers the clock stops
 between I/O events, so a `total` there leaves out rendering and a CPU-heavy regression would read as no change. Send only
 `db` there, and the row keeps testing the first byte. The header is visible to anyone who loads the page, so you can limit
 it to preview deployments, which is where this action measures.
@@ -300,8 +313,8 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
   test key for your RUM tool), the same way you keep preview data out of your production database. The test loads land
   there instead of in your real numbers.
 - A run sends 2 warm-up loads plus `rounds` x 2 loads per path to the previews: 18 page views for one path at the defaults.
-  Server time adds 33 plain GETs per side and path (3 warm-up, `server-samples` measured) that run no page scripts, so only
-  server-side analytics count them.
+  Server time adds 43 plain GETs per side and path (10 on new connections, 3 warm-up, `server-samples` measured) that run
+  no page scripts, so only server-side analytics count them.
 - `prod-url` loads are real visits to production and send real hits to your production analytics (3 per path per run). Leave
   `prod-url` out if that matters.
 - The loads use an ordinary Chrome user agent from GitHub's runner IPs, so they are hard to filter out afterwards. A test
@@ -321,8 +334,8 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
 ## Run time
 
 A load takes 2 to 10 seconds at the mobile profile, depending on the page. A run is 2 warm-up loads plus, per path,
-`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. Server time comes first and takes seconds: 66 requests
-per path at your server's speed. With the default 8 rounds on one path, the action took
+`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. Server time comes first and takes seconds: 86 requests
+per path at your server's speed, plus a second or so for each cold start it meets. With the default 8 rounds on one path, the action took
 52 s on the demo's one-page static site and 93 s on a small marketing site's home page. On Usero (pages of about 1 MB) 8
 rounds on two paths with prod took 6.5 to 7 minutes.
 

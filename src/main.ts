@@ -113,6 +113,7 @@ export async function run(env: Env = process.env): Promise<void> {
 			},
 			pages: measured.pages,
 			prodLoads: measured.prodLoads,
+			bundle: inputs.bundle,
 			alpha: DEFAULT_ALPHA,
 			durationMs: Date.now() - started,
 			generatedAt: new Date().toISOString(),

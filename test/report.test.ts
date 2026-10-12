@@ -82,18 +82,31 @@ interface ServerTimeCentre {
 	db?: number
 	queries?: number
 	cold?: number[]
+	// Server-Timing isolate marker on every request; the cold ones say cold.
+	marker?: boolean
+	// The 13 requests before the measured ones (10 new connections, 3 warm-up): those that were cold, and how much slower.
+	firstCold?: number[]
+	coldMs?: number
 }
 const SERVER_REQUESTS = 30
-function serverTimeSide(side: 'base' | 'head', { ms, total = false, db, queries, cold = [] }: ServerTimeCentre): ServerLoad[] {
-	return Array.from({ length: SERVER_REQUESTS }, (_, i) => {
-		const ttfb = ms + (side === 'base' ? ((i * 7) % 11) - 5 : ((i * 5 + 3) % 11) - 5) * 3 + (cold.includes(i) ? 1500 : 0)
-		return { ttfb, total: total ? ttfb - 20 : null, db: db ?? null, queries: queries ?? null }
+const FIRST_REQUESTS = 13
+function serverTimeSide(side: 'base' | 'head', c: ServerTimeCentre, count = SERVER_REQUESTS, coldAt = c.cold ?? []): ServerLoad[] {
+	const { ms, total = false, db, queries, marker = false, coldMs = 1500 } = c
+	return Array.from({ length: count }, (_, i) => {
+		const cold = coldAt.includes(i)
+		const ttfb = ms + (side === 'base' ? ((i * 7) % 11) - 5 : ((i * 5 + 3) % 11) - 5) * 3 + (cold ? coldMs : 0)
+		const isolate = marker ? (cold ? 'cold' : 'warm') : null
+		return { ttfb, total: total ? ttfb - 20 : null, db: db ?? null, queries: queries ?? null, isolate }
 	})
 }
 const serverSamples = (base: ServerTimeCentre, head: ServerTimeCentre = base): ServerSamples => ({
 	base: serverTimeSide('base', base),
 	head: serverTimeSide('head', head),
 	failures: { base: [], head: [] },
+	first: {
+		base: serverTimeSide('base', base, FIRST_REQUESTS, base.firstCold ?? []),
+		head: serverTimeSide('head', head, FIRST_REQUESTS, head.firstCold ?? []),
+	},
 })
 // `/` reports database time and queries in Server-Timing, `/docs` sends no Server-Timing.
 const SERVER: Record<string, ServerSamples> = {
@@ -109,9 +122,10 @@ interface ScenarioOptions {
 	// Every PR load failed, as when the preview 500s.
 	headDown?: boolean
 	server?: Record<string, ServerSamples>
+	bundle?: BuildInput['bundle']
 }
 
-function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDown = false, server = SERVER }: ScenarioOptions): RunResult {
+function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDown = false, server = SERVER, bundle = null }: ScenarioOptions): RunResult {
 	const headFailures = headDown ? Array<string>(8).fill('HTTP 500') : []
 	const page = (path: string, base: Centre, head: Centre, prodCentre: Centre): PageInput => {
 		const headLoads: Load[] = headDown ? Array<Load>(8).fill(null) : loads(head, missing[path], HEAD_JITTER)
@@ -129,6 +143,7 @@ function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDow
 		prodLoads: prod ? 3 : null,
 		config: { ...META.config, pairs: 8, serverRequests: SERVER_REQUESTS },
 		pages: [page('/', HOME, home, PROD_HOME), page('/docs', DOCS, docs, PROD_DOCS)],
+		bundle,
 	})
 }
 
@@ -196,6 +211,17 @@ const SCENARIOS: Record<string, RunResult> = {
 	clean: scenario({}),
 	'slow-preview-server': slowPreviewServer(),
 	'one-regression': scenario({ home: { ...HOME, LCP: 2950 } }),
+	// The server marks cold requests: three on main at about 1 s, two on the PR at about 1.5 s. Warm time is unchanged.
+	'cold-starts': scenario({
+		server: {
+			'/': serverSamples(
+				{ ms: 120, marker: true, firstCold: [0, 1, 5], coldMs: 900, cold: [12] },
+				{ ms: 120, marker: true, firstCold: [0, 2], coldMs: 1400 },
+			),
+			'/docs': serverSamples({ ms: 60 }),
+		},
+		bundle: { base: 33_810_000, head: 35_110_000 },
+	}),
 	// A slower query: 300 ms more server time on `/`, all of it database, with two cold requests on main.
 	'server-regression': scenario({
 		server: {
@@ -429,15 +455,37 @@ describe('renderComment', () => {
 			source: 'server-timing',
 			db: { baseMedian: 12, headMedian: 312 },
 			queries: { baseMedian: 3, headMedian: 4 },
-			cold: { base: [1603, 1612], head: [] },
+			coldStarts: { source: 'outliers', base: [1623, 1632], head: [], requests: { base: 43, head: 43 } },
 		})
 		// The two cold requests are left out of the test and the medians.
 		expect(server?.base).toHaveLength(28)
 		const md = render(result)
 		expect(md).toContain('### Lab web vitals: 1 regression vs main\n\n```diff\n- Server  /  300 ms slower (300%)\n```\n')
-		expect(md).toMatch(/^\| Server \| 100 ms \| 400 ms \| \*\*Slower\*\* \+300 ms \(\+300%\)<br><sub>db 12 ms to 312 ms, 3 to 4 queries, 2 cold requests left out<\/sub> \| n\/a \|$/m)
-		expect(md).toContain('Server time from 30 warm requests per side, unthrottled.')
+		expect(md).toMatch(/^\| Server \| 100 ms \| 400 ms \| \*\*Slower\*\* \+300 ms \(\+300%\)<br><sub>db 12 ms to 312 ms, 3 to 4 queries<\/sub> \| n\/a \|$/m)
+		expect(md).toContain('| Cold start | 1.63 s, 2 of 43 | none, 0 of 43 | not judged | n/a |')
+		expect(md).toContain('Server time from 30 warm requests per side, unthrottled, after 10 on new connections to catch cold starts.')
 		expect(countVerdicts(result)).toEqual({ regressions: 1, improvements: 0 })
+	})
+
+	it('reports cold starts the server marked, from every phase, without judging them', () => {
+		const result = SCENARIOS['cold-starts']
+		const server = result.pages[0].metrics.Server
+		expect(server?.server?.coldStarts.source).toBe('isolate')
+		expect(server?.server?.coldStarts.base).toHaveLength(4)
+		expect(server?.server?.coldStarts.head).toHaveLength(2)
+		// The marked cold request among the measured ones is left out of the warm test.
+		expect(server?.base).toHaveLength(29)
+		expect(server?.summary.verdict).toBe('no-change')
+		const md = render(result)
+		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
+		expect(md).toMatch(/^\| Cold start \| 1\.0\d s, 4 of 43 \| 1\.5\d s, 2 of 43 \| \+\d+ ms, not judged \| n\/a \|$/m)
+		expect(md).toContain('Server bundle: 33.8 MB on main, 35.1 MB on this PR (+1.30 MB, +3.8%). A larger bundle makes cold starts slower.')
+	})
+
+	it('says when only one bundle size was given, and leaves the line out without either', () => {
+		const one = render(build({ prodUrl: null, bundle: { base: null, head: 912_400 } }))
+		expect(one).toContain('Server bundle: 912 KB on this PR, the other side')
+		expect(render(build({ prodUrl: null, bundle: { base: null, head: null } }))).not.toContain('Server bundle')
 	})
 
 	it('keeps TTFB with its samples and test but a no-change verdict, for prod too', () => {

@@ -66,11 +66,13 @@ export const FROM_FIRST_BYTE: readonly MetricName[] = ['LCP', 'FCP']
 export const CONTEXT_ONLY: readonly MetricName[] = ['TTFB']
 
 export const DEFAULT_SERVER_SAMPLES = 30
+// Requests per side and path on a new connection each, before the warm-up: the likeliest way to reach a cold instance.
+export const SERVER_NEW_CONNECTIONS = 10
 // Discarded requests per side and path before the measured ones, to wake cold isolates and open connections.
 export const SERVER_WARM_UP = 3
 export const SERVER_TIMEOUT_MS = 30_000
-// A server time over max(factor x its side's median, median + plusMs) is a cold outlier. Up to maxShare of a side's
-// requests are left out of the test and listed; more than that is how the server behaves, so they all stay in.
+// Without a Server-Timing isolate marker, a time over max(factor x the side's warm median, median + plusMs) is a cold
+// start. Up to maxShare of the measured requests are left out of the test; more is how the server behaves, so they stay in.
 export const COLD = { factor: 3, plusMs: 300, maxShare: 0.1 }
 
 export const DEFAULT_ALPHA = 0.05

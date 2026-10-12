@@ -1,11 +1,11 @@
 // One full run: server time per page first, then warm up the previews and interleaved page loads in one headless Chrome.
 import { chromium } from 'playwright-core'
-import { DEFAULT_PROD_LOADS, DEVICES, type DeviceName, IDLE_TIMEOUT_MS, SERVER_WARM_UP, SETTLE_MS } from './config'
+import { DEFAULT_PROD_LOADS, DEVICES, type DeviceName, IDLE_TIMEOUT_MS, SERVER_NEW_CONNECTIONS, SERVER_WARM_UP, SETTLE_MS } from './config'
 import { sendHeaders } from './headers'
 import { measureLoad } from './measure'
 import type { PageInput } from './report'
 import { type Log, type PageSpec, type Side, samplePage, warmUp } from './run'
-import { type ServerSamples, sampleServer, serverRequestHeaders, timeRequest } from './server'
+import { type ServerSamples, sampleServer, serverRequestHeaders, timeNewConnection, timeRequest } from './server'
 
 export interface VitalsRun {
 	executablePath: string
@@ -26,14 +26,18 @@ async function measureServer(run: VitalsRun): Promise<Map<string, ServerSamples>
 	if (run.serverSamples === 0) return out
 	const headers = serverRequestHeaders(run.device, run.headers)
 	for (const page of run.pages) {
-		run.log(`${page.path}: server time, ${SERVER_WARM_UP} warm-up and ${run.serverSamples} requests per side`)
+		run.log(
+			`${page.path}: server time, ${SERVER_NEW_CONNECTIONS} on new connections, ${SERVER_WARM_UP} warm-up and ${run.serverSamples} measured requests per side`,
+		)
 		const samples = await sampleServer({
 			path: page.path,
 			baseUrl: run.baseUrl,
 			headUrl: run.headUrl,
 			samples: run.serverSamples,
+			newConnections: SERVER_NEW_CONNECTIONS,
 			warmUp: SERVER_WARM_UP,
 			request: url => timeRequest(url, headers),
+			newConnection: url => timeNewConnection(url, headers),
 			log: run.log,
 		})
 		out.set(page.path, samples)

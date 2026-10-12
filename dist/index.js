@@ -3371,8 +3371,8 @@ var require_data_url = __commonJS({
       return input.slice(start, position.position);
     }
     function stringPercentDecode(input) {
-      const bytes = encoder.encode(input);
-      return percentDecode(bytes);
+      const bytes2 = encoder.encode(input);
+      return percentDecode(bytes2);
     }
     function isHexCharByte(byte) {
       return byte >= 48 && byte <= 57 || byte >= 65 && byte <= 70 || byte >= 97 && byte <= 102;
@@ -4174,10 +4174,10 @@ var require_util2 = __commonJS({
     function TAOCheck() {
       return "success";
     }
-    function appendFetchMetadata(httpRequest) {
+    function appendFetchMetadata(httpRequest2) {
       let header = null;
-      header = httpRequest.mode;
-      httpRequest.headersList.set("sec-fetch-mode", header, true);
+      header = httpRequest2.mode;
+      httpRequest2.headersList.set("sec-fetch-mode", header, true);
     }
     function appendRequestOriginHeader(request2) {
       let serializedOrigin = request2.origin;
@@ -4355,7 +4355,7 @@ var require_util2 = __commonJS({
         return false;
       }
     }
-    function bytesMatch(bytes, metadataList) {
+    function bytesMatch(bytes2, metadataList) {
       if (crypto4 === void 0) {
         return true;
       }
@@ -4371,7 +4371,7 @@ var require_util2 = __commonJS({
       for (const item of metadata2) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto4.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto4.createHash(algorithm).update(bytes2).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -4649,17 +4649,17 @@ var require_util2 = __commonJS({
       return input;
     }
     async function readAllBytes(reader) {
-      const bytes = [];
+      const bytes2 = [];
       let byteLength = 0;
       while (true) {
         const { done, value: chunk } = await reader.read();
         if (done) {
-          return Buffer.concat(bytes, byteLength);
+          return Buffer.concat(bytes2, byteLength);
         }
         if (!isUint8Array(chunk)) {
           throw new TypeError("Received non-Uint8Array chunk");
         }
-        bytes.push(chunk);
+        bytes2.push(chunk);
         byteLength += chunk.length;
       }
     }
@@ -5613,19 +5613,19 @@ Content-Type: ${value.type || "application/octet-stream"}\r
     function bodyMixinMethods(instance) {
       const methods = {
         blob() {
-          return consumeBody(this, (bytes) => {
+          return consumeBody(this, (bytes2) => {
             let mimeType = bodyMimeType(this);
             if (mimeType === null) {
               mimeType = "";
             } else if (mimeType) {
               mimeType = serializeAMimeType(mimeType);
             }
-            return new Blob2([bytes], { type: mimeType });
+            return new Blob2([bytes2], { type: mimeType });
           }, instance);
         },
         arrayBuffer() {
-          return consumeBody(this, (bytes) => {
-            return new Uint8Array(bytes).buffer;
+          return consumeBody(this, (bytes2) => {
+            return new Uint8Array(bytes2).buffer;
           }, instance);
         },
         text() {
@@ -5664,8 +5664,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
           }, instance);
         },
         bytes() {
-          return consumeBody(this, (bytes) => {
-            return new Uint8Array(bytes);
+          return consumeBody(this, (bytes2) => {
+            return new Uint8Array(bytes2);
           }, instance);
         }
       };
@@ -5700,8 +5700,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
       const body2 = object[kState].body;
       return body2 != null && (body2.stream.locked || util3.isDisturbed(body2.stream));
     }
-    function parseJSONFromBytes(bytes) {
-      return JSON.parse(utf8DecodeBytes(bytes));
+    function parseJSONFromBytes(bytes2) {
+      return JSON.parse(utf8DecodeBytes(bytes2));
     }
     function bodyMimeType(requestOrResponse) {
       const headers = requestOrResponse[kState].headersList;
@@ -12403,10 +12403,10 @@ var require_response = __commonJS({
         if (init !== null) {
           init = webidl.converters.ResponseInit(init);
         }
-        const bytes = textEncoder.encode(
+        const bytes2 = textEncoder.encode(
           serializeJavascriptValueToJSONString(data)
         );
-        const body2 = extractBody(bytes);
+        const body2 = extractBody(bytes2);
         const responseObject = fromInnerResponse(makeResponse({}), "response");
         initializeResponse(responseObject, init, { body: body2[0], type: "application/json" });
         return responseObject;
@@ -13863,12 +13863,12 @@ var require_fetch = __commonJS({
           processBodyError(response.error);
           return;
         }
-        const processBody = (bytes) => {
-          if (!bytesMatch(bytes, request2.integrity)) {
+        const processBody = (bytes2) => {
+          if (!bytesMatch(bytes2, request2.integrity)) {
             processBodyError("integrity mismatch");
             return;
           }
-          response.body = safelyExtractBody(bytes)[0];
+          response.body = safelyExtractBody(bytes2)[0];
           fetchFinale(fetchParams, response);
         };
         await fullyReadBody(response.body, processBody, processBodyError);
@@ -14135,74 +14135,74 @@ var require_fetch = __commonJS({
     async function httpNetworkOrCacheFetch(fetchParams, isAuthenticationFetch = false, isNewConnectionFetch = false) {
       const request2 = fetchParams.request;
       let httpFetchParams = null;
-      let httpRequest = null;
+      let httpRequest2 = null;
       let response = null;
       const httpCache = null;
       const revalidatingFlag = false;
       if (request2.window === "no-window" && request2.redirect === "error") {
         httpFetchParams = fetchParams;
-        httpRequest = request2;
+        httpRequest2 = request2;
       } else {
-        httpRequest = cloneRequest(request2);
+        httpRequest2 = cloneRequest(request2);
         httpFetchParams = { ...fetchParams };
-        httpFetchParams.request = httpRequest;
+        httpFetchParams.request = httpRequest2;
       }
       const includeCredentials = request2.credentials === "include" || request2.credentials === "same-origin" && request2.responseTainting === "basic";
-      const contentLength2 = httpRequest.body ? httpRequest.body.length : null;
+      const contentLength2 = httpRequest2.body ? httpRequest2.body.length : null;
       let contentLengthHeaderValue = null;
-      if (httpRequest.body == null && ["POST", "PUT"].includes(httpRequest.method)) {
+      if (httpRequest2.body == null && ["POST", "PUT"].includes(httpRequest2.method)) {
         contentLengthHeaderValue = "0";
       }
       if (contentLength2 != null) {
         contentLengthHeaderValue = isomorphicEncode(`${contentLength2}`);
       }
       if (contentLengthHeaderValue != null) {
-        httpRequest.headersList.append("content-length", contentLengthHeaderValue, true);
+        httpRequest2.headersList.append("content-length", contentLengthHeaderValue, true);
       }
-      if (contentLength2 != null && httpRequest.keepalive) {
+      if (contentLength2 != null && httpRequest2.keepalive) {
       }
-      if (httpRequest.referrer instanceof URL) {
-        httpRequest.headersList.append("referer", isomorphicEncode(httpRequest.referrer.href), true);
+      if (httpRequest2.referrer instanceof URL) {
+        httpRequest2.headersList.append("referer", isomorphicEncode(httpRequest2.referrer.href), true);
       }
-      appendRequestOriginHeader(httpRequest);
-      appendFetchMetadata(httpRequest);
-      if (!httpRequest.headersList.contains("user-agent", true)) {
-        httpRequest.headersList.append("user-agent", defaultUserAgent);
+      appendRequestOriginHeader(httpRequest2);
+      appendFetchMetadata(httpRequest2);
+      if (!httpRequest2.headersList.contains("user-agent", true)) {
+        httpRequest2.headersList.append("user-agent", defaultUserAgent);
       }
-      if (httpRequest.cache === "default" && (httpRequest.headersList.contains("if-modified-since", true) || httpRequest.headersList.contains("if-none-match", true) || httpRequest.headersList.contains("if-unmodified-since", true) || httpRequest.headersList.contains("if-match", true) || httpRequest.headersList.contains("if-range", true))) {
-        httpRequest.cache = "no-store";
+      if (httpRequest2.cache === "default" && (httpRequest2.headersList.contains("if-modified-since", true) || httpRequest2.headersList.contains("if-none-match", true) || httpRequest2.headersList.contains("if-unmodified-since", true) || httpRequest2.headersList.contains("if-match", true) || httpRequest2.headersList.contains("if-range", true))) {
+        httpRequest2.cache = "no-store";
       }
-      if (httpRequest.cache === "no-cache" && !httpRequest.preventNoCacheCacheControlHeaderModification && !httpRequest.headersList.contains("cache-control", true)) {
-        httpRequest.headersList.append("cache-control", "max-age=0", true);
+      if (httpRequest2.cache === "no-cache" && !httpRequest2.preventNoCacheCacheControlHeaderModification && !httpRequest2.headersList.contains("cache-control", true)) {
+        httpRequest2.headersList.append("cache-control", "max-age=0", true);
       }
-      if (httpRequest.cache === "no-store" || httpRequest.cache === "reload") {
-        if (!httpRequest.headersList.contains("pragma", true)) {
-          httpRequest.headersList.append("pragma", "no-cache", true);
+      if (httpRequest2.cache === "no-store" || httpRequest2.cache === "reload") {
+        if (!httpRequest2.headersList.contains("pragma", true)) {
+          httpRequest2.headersList.append("pragma", "no-cache", true);
         }
-        if (!httpRequest.headersList.contains("cache-control", true)) {
-          httpRequest.headersList.append("cache-control", "no-cache", true);
+        if (!httpRequest2.headersList.contains("cache-control", true)) {
+          httpRequest2.headersList.append("cache-control", "no-cache", true);
         }
       }
-      if (httpRequest.headersList.contains("range", true)) {
-        httpRequest.headersList.append("accept-encoding", "identity", true);
+      if (httpRequest2.headersList.contains("range", true)) {
+        httpRequest2.headersList.append("accept-encoding", "identity", true);
       }
-      if (!httpRequest.headersList.contains("accept-encoding", true)) {
-        if (urlHasHttpsScheme(requestCurrentURL(httpRequest))) {
-          httpRequest.headersList.append("accept-encoding", "br, gzip, deflate", true);
+      if (!httpRequest2.headersList.contains("accept-encoding", true)) {
+        if (urlHasHttpsScheme(requestCurrentURL(httpRequest2))) {
+          httpRequest2.headersList.append("accept-encoding", "br, gzip, deflate", true);
         } else {
-          httpRequest.headersList.append("accept-encoding", "gzip, deflate", true);
+          httpRequest2.headersList.append("accept-encoding", "gzip, deflate", true);
         }
       }
-      httpRequest.headersList.delete("host", true);
+      httpRequest2.headersList.delete("host", true);
       if (includeCredentials) {
       }
       if (httpCache == null) {
-        httpRequest.cache = "no-store";
+        httpRequest2.cache = "no-store";
       }
-      if (httpRequest.cache !== "no-store" && httpRequest.cache !== "reload") {
+      if (httpRequest2.cache !== "no-store" && httpRequest2.cache !== "reload") {
       }
       if (response == null) {
-        if (httpRequest.cache === "only-if-cached") {
+        if (httpRequest2.cache === "only-if-cached") {
           return makeNetworkError("only if cached");
         }
         const forwardResponse = await httpNetworkFetch(
@@ -14210,7 +14210,7 @@ var require_fetch = __commonJS({
           includeCredentials,
           isNewConnectionFetch
         );
-        if (!safeMethodsSet.has(httpRequest.method) && forwardResponse.status >= 200 && forwardResponse.status <= 399) {
+        if (!safeMethodsSet.has(httpRequest2.method) && forwardResponse.status >= 200 && forwardResponse.status <= 399) {
         }
         if (revalidatingFlag && forwardResponse.status === 304) {
         }
@@ -14218,8 +14218,8 @@ var require_fetch = __commonJS({
           response = forwardResponse;
         }
       }
-      response.urlList = [...httpRequest.urlList];
-      if (httpRequest.headersList.contains("range", true)) {
+      response.urlList = [...httpRequest2.urlList];
+      if (httpRequest2.headersList.contains("range", true)) {
         response.rangeRequested = true;
       }
       response.requestIncludesCredentials = includeCredentials;
@@ -14281,12 +14281,12 @@ var require_fetch = __commonJS({
       if (request2.body == null && fetchParams.processRequestEndOfBody) {
         queueMicrotask(() => fetchParams.processRequestEndOfBody());
       } else if (request2.body != null) {
-        const processBodyChunk = async function* (bytes) {
+        const processBodyChunk = async function* (bytes2) {
           if (isCancelled(fetchParams)) {
             return;
           }
-          yield bytes;
-          fetchParams.processRequestBodyChunkLength?.(bytes.byteLength);
+          yield bytes2;
+          fetchParams.processRequestBodyChunkLength?.(bytes2.byteLength);
         };
         const processEndOfBody = () => {
           if (isCancelled(fetchParams)) {
@@ -14308,8 +14308,8 @@ var require_fetch = __commonJS({
         };
         requestBody = (async function* () {
           try {
-            for await (const bytes of request2.body.stream) {
-              yield* processBodyChunk(bytes);
+            for await (const bytes2 of request2.body.stream) {
+              yield* processBodyChunk(bytes2);
             }
             processEndOfBody();
           } catch (err) {
@@ -14360,33 +14360,33 @@ var require_fetch = __commonJS({
       fetchParams.controller.on("terminated", onAborted);
       fetchParams.controller.resume = async () => {
         while (true) {
-          let bytes;
+          let bytes2;
           let isFailure;
           try {
             const { done, value } = await fetchParams.controller.next();
             if (isAborted(fetchParams)) {
               break;
             }
-            bytes = done ? void 0 : value;
+            bytes2 = done ? void 0 : value;
           } catch (err) {
             if (fetchParams.controller.ended && !timingInfo.encodedBodySize) {
-              bytes = void 0;
+              bytes2 = void 0;
             } else {
-              bytes = err;
+              bytes2 = err;
               isFailure = true;
             }
           }
-          if (bytes === void 0) {
+          if (bytes2 === void 0) {
             readableStreamClose(fetchParams.controller.controller);
             finalizeResponse(fetchParams, response);
             return;
           }
-          timingInfo.decodedBodySize += bytes?.byteLength ?? 0;
+          timingInfo.decodedBodySize += bytes2?.byteLength ?? 0;
           if (isFailure) {
-            fetchParams.controller.terminate(bytes);
+            fetchParams.controller.terminate(bytes2);
             return;
           }
-          const buffer2 = new Uint8Array(bytes);
+          const buffer2 = new Uint8Array(bytes2);
           if (buffer2.byteLength) {
             fetchParams.controller.controller.enqueue(buffer2);
           }
@@ -14512,9 +14512,9 @@ var require_fetch = __commonJS({
               if (fetchParams.controller.dump) {
                 return;
               }
-              const bytes = chunk;
-              timingInfo.encodedBodySize += bytes.byteLength;
-              return this.body.push(bytes);
+              const bytes2 = chunk;
+              timingInfo.encodedBodySize += bytes2.byteLength;
+              return this.body.push(bytes2);
             },
             onComplete() {
               if (this.abort) {
@@ -14963,7 +14963,7 @@ var require_util4 = __commonJS({
       fr[kError] = null;
       const stream4 = blob.stream();
       const reader = stream4.getReader();
-      const bytes = [];
+      const bytes2 = [];
       let chunkPromise = reader.read();
       let isFirstChunk = true;
       (async () => {
@@ -14977,7 +14977,7 @@ var require_util4 = __commonJS({
             }
             isFirstChunk = false;
             if (!done && types.isUint8Array(value)) {
-              bytes.push(value);
+              bytes2.push(value);
               if ((fr[kLastProgressEventFired] === void 0 || Date.now() - fr[kLastProgressEventFired] >= 50) && !fr[kAborted]) {
                 fr[kLastProgressEventFired] = Date.now();
                 queueMicrotask(() => {
@@ -14989,7 +14989,7 @@ var require_util4 = __commonJS({
               queueMicrotask(() => {
                 fr[kState] = "done";
                 try {
-                  const result = packageData(bytes, type, blob.type, encodingName);
+                  const result = packageData(bytes2, type, blob.type, encodingName);
                   if (fr[kAborted]) {
                     return;
                   }
@@ -15029,7 +15029,7 @@ var require_util4 = __commonJS({
       });
       reader.dispatchEvent(event);
     }
-    function packageData(bytes, type, mimeType, encodingName) {
+    function packageData(bytes2, type, mimeType, encodingName) {
       switch (type) {
         case "DataURL": {
           let dataURL = "data:";
@@ -15039,7 +15039,7 @@ var require_util4 = __commonJS({
           }
           dataURL += ";base64,";
           const decoder = new StringDecoder("latin1");
-          for (const chunk of bytes) {
+          for (const chunk of bytes2) {
             dataURL += btoa2(decoder.write(chunk));
           }
           dataURL += btoa2(decoder.end());
@@ -15059,16 +15059,16 @@ var require_util4 = __commonJS({
           if (encoding === "failure") {
             encoding = "UTF-8";
           }
-          return decode(bytes, encoding);
+          return decode(bytes2, encoding);
         }
         case "ArrayBuffer": {
-          const sequence = combineByteSequences(bytes);
+          const sequence = combineByteSequences(bytes2);
           return sequence.buffer;
         }
         case "BinaryString": {
           let binaryString = "";
           const decoder = new StringDecoder("latin1");
-          for (const chunk of bytes) {
+          for (const chunk of bytes2) {
             binaryString += decoder.write(chunk);
           }
           binaryString += decoder.end();
@@ -15077,14 +15077,14 @@ var require_util4 = __commonJS({
       }
     }
     function decode(ioQueue, encoding) {
-      const bytes = combineByteSequences(ioQueue);
-      const BOMEncoding = BOMSniffing(bytes);
+      const bytes2 = combineByteSequences(ioQueue);
+      const BOMEncoding = BOMSniffing(bytes2);
       let slice = 0;
       if (BOMEncoding !== null) {
         encoding = BOMEncoding;
         slice = BOMEncoding === "UTF-8" ? 3 : 2;
       }
-      const sliced = bytes.slice(slice);
+      const sliced = bytes2.slice(slice);
       return new TextDecoder(encoding).decode(sliced);
     }
     function BOMSniffing(ioQueue) {
@@ -15637,9 +15637,9 @@ var require_cache = __commonJS({
           // 16.
         };
         operations.push(operation);
-        const bytes = await bodyReadPromise.promise;
+        const bytes2 = await bodyReadPromise.promise;
         if (clonedResponse.body != null) {
-          clonedResponse.body.source = bytes;
+          clonedResponse.body.source = bytes2;
         }
         const cacheJobPromise = createDeferredPromise();
         let errorData = null;
@@ -19106,7 +19106,7 @@ var require_base64 = __commonJS({
         es -= 2;
       else if (base64Str[base64Str.length - 1] == "=")
         es -= 1;
-      let bytes = new Uint8Array(es), bytePos = 0, groupPos = 0, b, p = 0;
+      let bytes2 = new Uint8Array(es), bytePos = 0, groupPos = 0, b, p = 0;
       for (let i = 0; i < base64Str.length; i++) {
         b = decTable[base64Str.charCodeAt(i)];
         if (b === void 0) {
@@ -19130,30 +19130,30 @@ var require_base64 = __commonJS({
             groupPos = 1;
             break;
           case 1:
-            bytes[bytePos++] = p << 2 | (b & 48) >> 4;
+            bytes2[bytePos++] = p << 2 | (b & 48) >> 4;
             p = b;
             groupPos = 2;
             break;
           case 2:
-            bytes[bytePos++] = (p & 15) << 4 | (b & 60) >> 2;
+            bytes2[bytePos++] = (p & 15) << 4 | (b & 60) >> 2;
             p = b;
             groupPos = 3;
             break;
           case 3:
-            bytes[bytePos++] = (p & 3) << 6 | b;
+            bytes2[bytePos++] = (p & 3) << 6 | b;
             groupPos = 0;
             break;
         }
       }
       if (groupPos == 1)
         throw Error(`invalid base64 string.`);
-      return bytes.subarray(0, bytePos);
+      return bytes2.subarray(0, bytePos);
     }
     exports2.base64decode = base64decode;
-    function base64encode2(bytes) {
+    function base64encode2(bytes2) {
       let base64 = "", groupPos = 0, b, p = 0;
-      for (let i = 0; i < bytes.length; i++) {
-        b = bytes[i];
+      for (let i = 0; i < bytes2.length; i++) {
+        b = bytes2[i];
         switch (groupPos) {
           case 0:
             base64 += encTable[b >> 2];
@@ -19191,23 +19191,23 @@ var require_protobufjs_utf8 = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.utf8read = void 0;
     var fromCharCodes = (chunk) => String.fromCharCode.apply(String, chunk);
-    function utf8read(bytes) {
-      if (bytes.length < 1)
+    function utf8read(bytes2) {
+      if (bytes2.length < 1)
         return "";
       let pos = 0, parts = [], chunk = [], i = 0, t;
-      let len = bytes.length;
+      let len = bytes2.length;
       while (pos < len) {
-        t = bytes[pos++];
+        t = bytes2[pos++];
         if (t < 128)
           chunk[i++] = t;
         else if (t > 191 && t < 224)
-          chunk[i++] = (t & 31) << 6 | bytes[pos++] & 63;
+          chunk[i++] = (t & 31) << 6 | bytes2[pos++] & 63;
         else if (t > 239 && t < 365) {
-          t = ((t & 7) << 18 | (bytes[pos++] & 63) << 12 | (bytes[pos++] & 63) << 6 | bytes[pos++] & 63) - 65536;
+          t = ((t & 7) << 18 | (bytes2[pos++] & 63) << 12 | (bytes2[pos++] & 63) << 6 | bytes2[pos++] & 63) - 65536;
           chunk[i++] = 55296 + (t >> 10);
           chunk[i++] = 56320 + (t & 1023);
         } else
-          chunk[i++] = (t & 15) << 12 | (bytes[pos++] & 63) << 6 | bytes[pos++] & 63;
+          chunk[i++] = (t & 15) << 12 | (bytes2[pos++] & 63) << 6 | bytes2[pos++] & 63;
         if (i > 8191) {
           parts.push(fromCharCodes(chunk));
           i = 0;
@@ -19302,19 +19302,19 @@ var require_goog_varint = __commonJS({
       throw new Error("invalid varint");
     }
     exports2.varint64read = varint64read;
-    function varint64write(lo, hi, bytes) {
+    function varint64write(lo, hi, bytes2) {
       for (let i = 0; i < 28; i = i + 7) {
         const shift = lo >>> i;
         const hasNext = !(shift >>> 7 == 0 && hi == 0);
         const byte = (hasNext ? shift | 128 : shift) & 255;
-        bytes.push(byte);
+        bytes2.push(byte);
         if (!hasNext) {
           return;
         }
       }
       const splitBits = lo >>> 28 & 15 | (hi & 7) << 4;
       const hasMoreBits = !(hi >> 3 == 0);
-      bytes.push((hasMoreBits ? splitBits | 128 : splitBits) & 255);
+      bytes2.push((hasMoreBits ? splitBits | 128 : splitBits) & 255);
       if (!hasMoreBits) {
         return;
       }
@@ -19322,12 +19322,12 @@ var require_goog_varint = __commonJS({
         const shift = hi >>> i;
         const hasNext = !(shift >>> 7 == 0);
         const byte = (hasNext ? shift | 128 : shift) & 255;
-        bytes.push(byte);
+        bytes2.push(byte);
         if (!hasNext) {
           return;
         }
       }
-      bytes.push(hi >>> 31 & 1);
+      bytes2.push(hi >>> 31 & 1);
     }
     exports2.varint64write = varint64write;
     var TWO_PWR_32_DBL = (1 << 16) * (1 << 16);
@@ -19397,19 +19397,19 @@ var require_goog_varint = __commonJS({
       );
     }
     exports2.int64toString = int64toString;
-    function varint32write(value, bytes) {
+    function varint32write(value, bytes2) {
       if (value >= 0) {
         while (value > 127) {
-          bytes.push(value & 127 | 128);
+          bytes2.push(value & 127 | 128);
           value = value >>> 7;
         }
-        bytes.push(value);
+        bytes2.push(value);
       } else {
         for (let i = 0; i < 9; i++) {
-          bytes.push(value & 127 | 128);
+          bytes2.push(value & 127 | 128);
           value = value >> 7;
         }
-        bytes.push(1);
+        bytes2.push(1);
       }
     }
     exports2.varint32write = varint32write;
@@ -19680,7 +19680,7 @@ var require_binary_reader = __commonJS({
     var goog_varint_1 = require_goog_varint();
     var defaultsRead = {
       readUnknownField: true,
-      readerFactory: (bytes) => new BinaryReader(bytes)
+      readerFactory: (bytes2) => new BinaryReader(bytes2)
     };
     function binaryReadOptions(options) {
       return options ? Object.assign(Object.assign({}, defaultsRead), options) : defaultsRead;
@@ -19925,14 +19925,14 @@ var require_binary_writer = __commonJS({
         let len = 0;
         for (let i = 0; i < this.chunks.length; i++)
           len += this.chunks[i].length;
-        let bytes = new Uint8Array(len);
+        let bytes2 = new Uint8Array(len);
         let offset = 0;
         for (let i = 0; i < this.chunks.length; i++) {
-          bytes.set(this.chunks[i], offset);
+          bytes2.set(this.chunks[i], offset);
           offset += this.chunks[i].length;
         }
         this.chunks = [];
-        return bytes;
+        return bytes2;
       }
       /**
        * Start a new fork for length-delimited data like a message
@@ -53768,8 +53768,8 @@ var require_GetValueFromBuffer = __commonJS({
         rawValue = $slice(new $Uint8Array(arrayBuffer, byteIndex), 0, elementSize);
       }
       var isLittleEndian = arguments.length > 5 ? arguments[5] : defaultEndianness === "little";
-      var bytes = isLittleEndian ? $slice(safeConcat([0, 0, 0, 0, 0, 0, 0, 0], rawValue), -elementSize) : $slice(safeConcat(rawValue, [0, 0, 0, 0, 0, 0, 0, 0]), 0, elementSize);
-      return RawBytesToNumeric(type, bytes, isLittleEndian);
+      var bytes2 = isLittleEndian ? $slice(safeConcat([0, 0, 0, 0, 0, 0, 0, 0], rawValue), -elementSize) : $slice(safeConcat(rawValue, [0, 0, 0, 0, 0, 0, 0, 0]), 0, elementSize);
+      return RawBytesToNumeric(type, bytes2, isLittleEndian);
     };
   }
 });
@@ -57662,7 +57662,7 @@ var require_buffers = __commonJS({
         this.length += reps[i].length;
       }
       var removed = new Buffers();
-      var bytes = 0;
+      var bytes2 = 0;
       var startBytes = 0;
       for (var ii = 0; ii < buffers.length && startBytes + buffers[ii].length < index; ii++) {
         startBytes += buffers[ii].length;
@@ -57877,9 +57877,9 @@ var require_binary = __commonJS({
     exports2.stream = function(input) {
       if (input) return exports2.apply(null, arguments);
       var pending = null;
-      function getBytes(bytes, cb, skip) {
+      function getBytes(bytes2, cb, skip) {
         pending = {
-          bytes,
+          bytes: bytes2,
           skip,
           cb: function(buf) {
             pending = null;
@@ -57897,19 +57897,19 @@ var require_binary = __commonJS({
         if (typeof pending === "function") {
           pending();
         } else {
-          var bytes = offset + pending.bytes;
-          if (buffers.length >= bytes) {
+          var bytes2 = offset + pending.bytes;
+          if (buffers.length >= bytes2) {
             var buf;
             if (offset == null) {
-              buf = buffers.splice(0, bytes);
+              buf = buffers.splice(0, bytes2);
               if (!pending.skip) {
                 buf = buf.slice();
               }
             } else {
               if (!pending.skip) {
-                buf = buffers.slice(offset, bytes);
+                buf = buffers.slice(offset, bytes2);
               }
-              offset = bytes;
+              offset = bytes2;
             }
             if (pending.skip) {
               pending.cb();
@@ -57923,9 +57923,9 @@ var require_binary = __commonJS({
         function next() {
           if (!done) saw.next();
         }
-        var self2 = words2(function(bytes, cb) {
+        var self2 = words2(function(bytes2, cb) {
           return function(name) {
-            getBytes(bytes, function(buf) {
+            getBytes(bytes2, function(buf) {
               vars.set(name, cb(buf));
               next();
             });
@@ -57963,20 +57963,20 @@ var require_binary = __commonJS({
             }.bind(this));
           }, vars.store);
         };
-        self2.buffer = function(name, bytes) {
-          if (typeof bytes === "string") {
-            bytes = vars.get(bytes);
+        self2.buffer = function(name, bytes2) {
+          if (typeof bytes2 === "string") {
+            bytes2 = vars.get(bytes2);
           }
-          getBytes(bytes, function(buf) {
+          getBytes(bytes2, function(buf) {
             vars.set(name, buf);
             next();
           });
         };
-        self2.skip = function(bytes) {
-          if (typeof bytes === "string") {
-            bytes = vars.get(bytes);
+        self2.skip = function(bytes2) {
+          if (typeof bytes2 === "string") {
+            bytes2 = vars.get(bytes2);
           }
-          getBytes(bytes, function() {
+          getBytes(bytes2, function() {
             next();
           });
         };
@@ -58045,11 +58045,11 @@ var require_binary = __commonJS({
       return stream4;
     };
     exports2.parse = function parse4(buffer2) {
-      var self2 = words2(function(bytes, cb) {
+      var self2 = words2(function(bytes2, cb) {
         return function(name) {
-          if (offset + bytes <= buffer2.length) {
-            var buf = buffer2.slice(offset, offset + bytes);
-            offset += bytes;
+          if (offset + bytes2 <= buffer2.length) {
+            var buf = buffer2.slice(offset, offset + bytes2);
+            offset += bytes2;
             vars.set(name, cb(buf));
           } else {
             vars.set(name, null);
@@ -58093,11 +58093,11 @@ var require_binary = __commonJS({
         vars.set(name, buf);
         return self2;
       };
-      self2.skip = function(bytes) {
-        if (typeof bytes === "string") {
-          bytes = vars.get(bytes);
+      self2.skip = function(bytes2) {
+        if (typeof bytes2 === "string") {
+          bytes2 = vars.get(bytes2);
         }
-        offset += bytes;
+        offset += bytes2;
         return self2;
       };
       self2.scan = function(name, search) {
@@ -58130,42 +58130,42 @@ var require_binary = __commonJS({
       };
       return self2;
     };
-    function decodeLEu(bytes) {
+    function decodeLEu(bytes2) {
       var acc = 0;
-      for (var i = 0; i < bytes.length; i++) {
-        acc += Math.pow(256, i) * bytes[i];
+      for (var i = 0; i < bytes2.length; i++) {
+        acc += Math.pow(256, i) * bytes2[i];
       }
       return acc;
     }
-    function decodeBEu(bytes) {
+    function decodeBEu(bytes2) {
       var acc = 0;
-      for (var i = 0; i < bytes.length; i++) {
-        acc += Math.pow(256, bytes.length - i - 1) * bytes[i];
+      for (var i = 0; i < bytes2.length; i++) {
+        acc += Math.pow(256, bytes2.length - i - 1) * bytes2[i];
       }
       return acc;
     }
-    function decodeBEs(bytes) {
-      var val = decodeBEu(bytes);
-      if ((bytes[0] & 128) == 128) {
-        val -= Math.pow(256, bytes.length);
+    function decodeBEs(bytes2) {
+      var val = decodeBEu(bytes2);
+      if ((bytes2[0] & 128) == 128) {
+        val -= Math.pow(256, bytes2.length);
       }
       return val;
     }
-    function decodeLEs(bytes) {
-      var val = decodeLEu(bytes);
-      if ((bytes[bytes.length - 1] & 128) == 128) {
-        val -= Math.pow(256, bytes.length);
+    function decodeLEs(bytes2) {
+      var val = decodeLEu(bytes2);
+      if ((bytes2[bytes2.length - 1] & 128) == 128) {
+        val -= Math.pow(256, bytes2.length);
       }
       return val;
     }
     function words2(decode) {
       var self2 = {};
-      [1, 2, 4, 8].forEach(function(bytes) {
-        var bits = bytes * 8;
-        self2["word" + bits + "le"] = self2["word" + bits + "lu"] = decode(bytes, decodeLEu);
-        self2["word" + bits + "ls"] = decode(bytes, decodeLEs);
-        self2["word" + bits + "be"] = self2["word" + bits + "bu"] = decode(bytes, decodeBEu);
-        self2["word" + bits + "bs"] = decode(bytes, decodeBEs);
+      [1, 2, 4, 8].forEach(function(bytes2) {
+        var bits = bytes2 * 8;
+        self2["word" + bits + "le"] = self2["word" + bits + "lu"] = decode(bytes2, decodeLEu);
+        self2["word" + bits + "ls"] = decode(bytes2, decodeLEs);
+        self2["word" + bits + "be"] = self2["word" + bits + "bu"] = decode(bytes2, decodeBEu);
+        self2["word" + bits + "bs"] = decode(bytes2, decodeBEs);
       });
       self2.word8 = self2.word8u = self2.word8be;
       self2.word8s = self2.word8bs;
@@ -61725,6 +61725,7 @@ var FLOORS = {
 var FROM_FIRST_BYTE = ["LCP", "FCP"];
 var CONTEXT_ONLY = ["TTFB"];
 var DEFAULT_SERVER_SAMPLES = 30;
+var SERVER_NEW_CONNECTIONS = 10;
 var SERVER_WARM_UP = 3;
 var SERVER_TIMEOUT_MS = 3e4;
 var COLD = { factor: 3, plusMs: 300, maxShare: 0.1 };
@@ -61836,8 +61837,8 @@ var GitHubApi = class {
       await res.body?.cancel();
       return { status: res.status === 200 ? 413 : res.status, bytes: null };
     }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    return bytes.length > maxBytes ? { status: 413, bytes: null } : { status: 200, bytes };
+    const bytes2 = new Uint8Array(await res.arrayBuffer());
+    return bytes2.length > maxBytes ? { status: 413, bytes: null } : { status: 200, bytes: bytes2 };
   }
 };
 async function findPullRequest(api, repo, sha, log3) {
@@ -61987,8 +61988,8 @@ async function inBatches(items, size, fn) {
 }
 async function download(api, repo, candidate, setup) {
   try {
-    const { bytes } = await api.download(`/repos/${repo}/actions/artifacts/${candidate.id}/zip`, MAX_ZIP_BYTES);
-    const file = bytes ? unzipFile(bytes, VITALS_FILE) : null;
+    const { bytes: bytes2 } = await api.download(`/repos/${repo}/actions/artifacts/${candidate.id}/zip`, MAX_ZIP_BYTES);
+    const file = bytes2 ? unzipFile(bytes2, VITALS_FILE) : null;
     if (!file) return null;
     const json = JSON.parse(new TextDecoder().decode(file));
     return readMedians(json, setup.device);
@@ -62119,6 +62120,10 @@ function serverSamples(raw) {
   }
   return n;
 }
+function bytes(name, raw) {
+  if (raw === "") return null;
+  return int(name, raw, { min: 0, max: Number.MAX_SAFE_INTEGER });
+}
 function parseHeaders(raw) {
   const out = {};
   for (const line of lines(raw)) {
@@ -62174,7 +62179,8 @@ function parseInputs(get) {
     headers: parseHeaders(get("headers")),
     failOnRegression: bool("fail-on-regression", input("fail-on-regression"), false),
     prNumber: prRaw ? int("pr-number", prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null,
-    chartBaseUrl: url("chart-base-url", input("chart-base-url", CHART_BASE_URL))
+    chartBaseUrl: url("chart-base-url", input("chart-base-url", CHART_BASE_URL)),
+    bundle: { base: bytes("base-bundle-bytes", input("base-bundle-bytes")), head: bytes("head-bundle-bytes", input("head-bundle-bytes")) }
   };
 }
 
@@ -62423,29 +62429,51 @@ function medianPair(base, head, key) {
 }
 function summariseServer(samples, alpha, floor = FLOORS.Server) {
   const good = (side) => side.filter((s) => s !== null);
-  const base = good(samples.base);
-  const head = good(samples.head);
-  if (base.length < MIN_SAMPLES || head.length < MIN_SAMPLES) return null;
-  const source = [...base, ...head].every((s) => s.total !== null) ? "server-timing" : "ttfb";
+  const first = { base: good(samples.first?.base ?? []), head: good(samples.first?.head ?? []) };
+  const measured = { base: good(samples.base), head: good(samples.head) };
+  const marked = [...first.base, ...first.head, ...measured.base, ...measured.head].some((s) => s.isolate !== null);
   const split = (side) => {
-    const values2 = side.map((s) => source === "server-timing" && s.total !== null ? s.total : s.ttfb);
-    const limit = coldLimit(values2);
-    return limit === null ? { kept: values2, cold: [] } : { kept: values2.filter((v) => v <= limit), cold: values2.filter((v) => v > limit) };
+    if (marked) {
+      return {
+        warm: measured[side].filter((s) => s.isolate !== "cold"),
+        cold: [...first[side], ...measured[side]].filter((s) => s.isolate === "cold").map((s) => s.ttfb)
+      };
+    }
+    const limit = coldLimit(measured[side].map((s) => s.ttfb));
+    const warmMedian = median(measured[side].map((s) => s.ttfb));
+    const firstLimit = warmMedian === null ? null : Math.max(COLD.factor * warmMedian, warmMedian + COLD.plusMs);
+    return {
+      warm: limit === null ? measured[side] : measured[side].filter((s) => s.ttfb <= limit),
+      cold: [
+        ...firstLimit === null ? [] : first[side].filter((s) => s.ttfb > firstLimit),
+        ...limit === null ? [] : measured[side].filter((s) => s.ttfb > limit)
+      ].map((s) => s.ttfb)
+    };
   };
-  const b = split(base);
-  const h = split(head);
-  const summary2 = summarise(compareSamples(b.kept, h.kept, { alpha, ...floor }), b.kept, h.kept, false, false);
+  const b = split("base");
+  const h = split("head");
+  if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null;
+  const source = [...b.warm, ...h.warm].every((s) => s.total !== null) ? "server-timing" : "ttfb";
+  const value = (s) => source === "server-timing" && s.total !== null ? s.total : s.ttfb;
+  const bKept = b.warm.map(value);
+  const hKept = h.warm.map(value);
+  const summary2 = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false);
   if (summary2.baseMedian < floor.absFloor) summary2.deltaPct = null;
   return {
-    base: b.kept,
-    head: h.kept,
+    base: bKept,
+    head: hKept,
     summary: summary2,
     server: {
       source,
-      db: medianPair(base, head, "db"),
-      queries: medianPair(base, head, "queries"),
-      cold: { base: b.cold, head: h.cold },
-      requests: { base: samples.base, head: samples.head }
+      db: medianPair(b.warm, h.warm, "db"),
+      queries: medianPair(b.warm, h.warm, "queries"),
+      coldStarts: {
+        source: marked ? "isolate" : "outliers",
+        base: b.cold,
+        head: h.cold,
+        requests: { base: first.base.length + measured.base.length, head: first.head.length + measured.head.length }
+      },
+      requests: { base: samples.base, head: samples.head, first: samples.first ?? { base: [], head: [] } }
     }
   };
 }
@@ -62455,10 +62483,12 @@ function buildResult({
   prodLoads = null,
   durationMs = null,
   generatedAt = null,
+  bundle = null,
   ...meta
 }) {
   return {
     version: 1,
+    bundle: bundle && (bundle.base !== null || bundle.head !== null) ? bundle : null,
     repo: meta.repo,
     prNumber: meta.prNumber,
     branch: meta.branch,
@@ -62607,9 +62637,35 @@ function serverDetail(d) {
   const parts = [];
   if (d.db) parts.push(`db ${formatValue("Server", d.db.baseMedian)} to ${formatValue("Server", d.db.headMedian)}`);
   if (d.queries) parts.push(`${queryCount(d.queries.baseMedian)} to ${queryCount(d.queries.headMedian)} queries`);
-  const cold = d.cold.base.length + d.cold.head.length;
-  if (cold > 0) parts.push(`${plural(cold, "cold request")} left out`);
   return parts.length > 0 ? `<br><sub>${parts.join(", ")}</sub>` : "";
+}
+function coldStartRow(c, hasProd) {
+  if (c.base.length === 0 && c.head.length === 0) return null;
+  const side = (values2, requests) => `${values2.length > 0 ? formatValue("Server", median(values2)) : "none"}, ${values2.length}${NBSP}of${NBSP}${requests}`;
+  const b = median(c.base);
+  const h = median(c.head);
+  const change = b !== null && h !== null ? `${formatChange("Server", b, h, null)}, not judged` : "not judged";
+  const cells = ["Cold start", side(c.base, c.requests.base), side(c.head, c.requests.head), change];
+  if (hasProd) cells.push("n/a");
+  return `| ${cells.join(" | ")} |`;
+}
+function formatBytes(bytes2) {
+  const abs = Math.abs(bytes2);
+  if (abs >= 1e6) return `${(bytes2 / 1e6).toFixed(abs >= 1e7 ? 1 : 2)}${NBSP}MB`;
+  if (abs >= 1e3) return `${Math.round(bytes2 / 1e3)}${NBSP}KB`;
+  return `${Math.round(bytes2)}${NBSP}B`;
+}
+function bundleLine({ base, head }) {
+  if (base === null || head === null) {
+    const [size, side] = base === null ? [head, "this PR"] : [base, "main"];
+    return `Server bundle: ${size === null ? "n/a" : formatBytes(size)} on ${side}, the other side's size was not given. Not judged.`;
+  }
+  const diff = head - base;
+  const sign = diff > 0 ? "+" : MINUS;
+  const parts = [diff === 0 ? "no change" : `${sign}${formatBytes(Math.abs(diff))}`];
+  if (diff !== 0 && base > 0) parts.push(`${sign}${Math.abs(diff / base * 100).toFixed(1)}%`);
+  const change = parts.join(", ");
+  return `Server bundle: ${formatBytes(base)} on main, ${formatBytes(head)} on this PR (${change}). A larger bundle makes cold starts slower. Not judged.`;
 }
 function pageTable(page, hasProd) {
   const header = ["Metric", "main", `this${NBSP}PR`, "Change"];
@@ -62621,7 +62677,9 @@ function pageTable(page, hasProd) {
     const word = s.verdict === "no-change" ? "" : `**${capitalise(directionWord(metric, s.verdict))}** `;
     const cells = [metric, formatValue(metric, s.baseMedian), formatValue(metric, s.headMedian), `${word}${change}${detail}`];
     if (hasProd) cells.push(formatValue(metric, s.vsProd?.prodMedian));
-    return `| ${cells.join(" | ")} |`;
+    const cold = m.server ? coldStartRow(m.server.coldStarts, hasProd) : null;
+    return cold ? `| ${cells.join(" | ")} |
+${cold}` : `| ${cells.join(" | ")} |`;
   });
   return [`**${code(page.path)}**`, "", `| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`, ...rows];
 }
@@ -62667,6 +62725,7 @@ function renderComment(result, { failOnRegression = false, history, chartBaseUrl
     lines2.push(`<details${regressed.length > 0 ? " open" : ""}>`, "<summary>All metrics</summary>", "");
     if (flags.length === 0) lines2.push(...chartLines);
     for (const page of pages) lines2.push(...pageTable(page, hasProd), "");
+    if (result.bundle) lines2.push(bundleLine(result.bundle), "");
     const fromFirstByteMetrics = METRICS.filter((k) => pages.some((p) => p.metrics[k]?.summary.fromFirstByte));
     if (fromFirstByteMetrics.length > 0) {
       lines2.push(
@@ -62689,7 +62748,11 @@ function renderComment(result, { failOnRegression = false, history, chartBaseUrl
     failOnRegression ? "Fails the job on a regression." : "Report only, never fails the build.",
     `Medians of ${config.pairs} cold ${config.device} loads per side${prodNote}, interleaved, at ${net}.`
   ];
-  if (config.serverRequests > 0) footer.push(`Server time from ${config.serverRequests} warm requests per side, unthrottled.`);
+  if (config.serverRequests > 0) {
+    footer.push(
+      `Server time from ${config.serverRequests} warm requests per side, unthrottled, after ${SERVER_NEW_CONNECTIONS} on new connections to catch cold starts.`
+    );
+  }
   footer.push(
     `A change counts when it is significant (one-sided Mann-Whitney, p < ${meta.alpha}) and larger than a per-metric floor.`
   );
@@ -65736,8 +65799,8 @@ function isRestError(e) {
 }
 
 // node_modules/@typespec/ts-http-runtime/dist/esm/util/bytesEncoding.js
-function uint8ArrayToString(bytes, format) {
-  return Buffer.from(bytes).toString(format);
+function uint8ArrayToString(bytes2, format) {
+  return Buffer.from(bytes2).toString(format);
 }
 function stringToUint8Array(value, format) {
   return Buffer.from(value, format);
@@ -67004,8 +67067,8 @@ function randomUUID3() {
   return randomUUID2();
 }
 var isNodeLike2 = isNodeLike;
-function uint8ArrayToString2(bytes, format) {
-  return uint8ArrayToString(bytes, format);
+function uint8ArrayToString2(bytes2, format) {
+  return uint8ArrayToString(bytes2, format);
 }
 function stringToUint8Array2(value, format) {
   return stringToUint8Array(value, format);
@@ -69745,8 +69808,8 @@ function createRequestPolicyFactoryPolicy(factories) {
     name: requestPolicyFactoryPolicyName,
     async sendRequest(request2, next) {
       let httpPipeline = {
-        async sendRequest(httpRequest) {
-          const response2 = await next(toPipelineRequest(httpRequest));
+        async sendRequest(httpRequest2) {
+          const response2 = await next(toPipelineRequest(httpRequest2));
           return toCompatResponse(response2, { createProxy: true });
         }
       };
@@ -76321,11 +76384,11 @@ var NativeCRC64 = (() => {
     function _base64ToArrayBuffer(base64) {
       var binary_string = window.atob(base64);
       var len = binary_string.length;
-      var bytes = new Uint8Array(len);
+      var bytes2 = new Uint8Array(len);
       for (var i = 0; i < len; i++) {
-        bytes[i] = binary_string.charCodeAt(i);
+        bytes2[i] = binary_string.charCodeAt(i);
       }
-      return bytes;
+      return bytes2;
     }
     function getBinary(file) {
       if (typeof Buffer == "function") {
@@ -77152,8 +77215,8 @@ var NativeCRC64 = (() => {
       },
       alloc: function(array, view) {
         assert(ensureCache.buffer);
-        var bytes = view.BYTES_PER_ELEMENT;
-        var len = array.length * bytes;
+        var bytes2 = view.BYTES_PER_ELEMENT;
+        var len = array.length * bytes2;
         len = len + 7 & -8;
         var ret;
         if (ensureCache.pos + len >= ensureCache.size) {
@@ -77169,8 +77232,8 @@ var NativeCRC64 = (() => {
       },
       copy: function(array, view, offset) {
         offset >>>= 0;
-        var bytes = view.BYTES_PER_ELEMENT;
-        switch (bytes) {
+        var bytes2 = view.BYTES_PER_ELEMENT;
+        switch (bytes2) {
           case 2:
             offset >>>= 1;
             break;
@@ -96235,11 +96298,11 @@ var AvroParser = class _AvroParser {
    * @param options -
    */
   static async readFixedBytes(stream4, length, options = {}) {
-    const bytes = await stream4.read(length, { abortSignal: options.abortSignal });
-    if (bytes.length !== length) {
+    const bytes2 = await stream4.read(length, { abortSignal: options.abortSignal });
+    if (bytes2.length !== length) {
       throw new Error("Hit stream end.");
     }
-    return bytes;
+    return bytes2;
   }
   /**
    * Reads a single byte from the stream.
@@ -106099,6 +106162,8 @@ async function measureLoad(browser, url3, { device, interaction, settleMs, idleT
 }
 
 // src/server.ts
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 var DOCUMENT_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 function serverRequestHeaders(device, extra) {
   const headers = { "user-agent": DEVICES[device].userAgent, accept: DOCUMENT_ACCEPT };
@@ -106131,7 +106196,7 @@ function nonNegative(raw) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 function parseServerTiming(header) {
-  const out = { total: null, db: null, queries: null };
+  const out = { total: null, db: null, queries: null, isolate: null };
   if (!header) return out;
   let dbEntries = 0;
   let dbDur = null;
@@ -106146,6 +106211,8 @@ function parseServerTiming(header) {
     const dur = nonNegative(params.get("dur"));
     const key = name.toLowerCase();
     if (key === "total" && out.total === null) out.total = dur;
+    const desc = params.get("desc")?.toLowerCase();
+    if (key === "isolate" && out.isolate === null && (desc === "cold" || desc === "warm")) out.isolate = desc;
     if (key === "db") {
       dbEntries++;
       if (dur !== null) dbDur = (dbDur ?? 0) + dur;
@@ -106171,8 +106238,37 @@ async function timeRequest(url3, headers, timeoutMs = SERVER_TIMEOUT_MS) {
   const ttfb = timing ? timing.responseStart - timing.requestStart : wall;
   return { ttfb: Math.round(ttfb * 10) / 10, ...parseServerTiming(response.headers.get("server-timing")) };
 }
+var MAX_REDIRECTS = 5;
+function timeNewConnection(url3, headers, timeoutMs = SERVER_TIMEOUT_MS) {
+  const started = performance.now();
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const get = (target, hops) => new Promise((resolve2, reject) => {
+    const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const req = send(target, { headers, agent: false, signal: deadline }, (res) => {
+      const ttfb = performance.now() - started;
+      const status = res.statusCode ?? 0;
+      const location = res.headers.location;
+      res.resume();
+      res.on("error", reject);
+      res.on("end", () => {
+        if (status >= 300 && status < 400 && location && hops < MAX_REDIRECTS) {
+          get(new URL(location, target), hops + 1).then(resolve2, reject);
+        } else if (status < 200 || status >= 300) reject(new Error(`HTTP ${status}`));
+        else {
+          const timing = res.headers["server-timing"];
+          const header = Array.isArray(timing) ? timing.join(", ") : timing ?? null;
+          resolve2({ ttfb: Math.round(ttfb * 10) / 10, ...parseServerTiming(header) });
+        }
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  return get(new URL(url3), 0);
+}
 function logLine(s) {
   const parts = [`${Math.round(s.ttfb)} ms`];
+  if (s.isolate !== null) parts.push(s.isolate);
   if (s.total !== null) parts.push(`total ${Math.round(s.total)} ms`);
   if (s.db !== null) parts.push(`db ${Math.round(s.db)} ms`);
   if (s.queries !== null) parts.push(`${s.queries} queries`);
@@ -106183,26 +106279,34 @@ async function sampleServer({
   baseUrl: baseUrl2,
   headUrl,
   samples,
+  newConnections,
   warmUp: warmUp2,
   request: request2,
+  newConnection,
   log: log3
 }) {
   const sides = [
     { name: "base", label: "main", url: joinUrl(baseUrl2, path4) },
     { name: "head", label: "PR", url: joinUrl(headUrl, path4) }
   ];
-  const out = { base: [], head: [], failures: { base: [], head: [] } };
-  const warm = [];
-  for (let i = 0; i < warmUp2; i++) {
-    for (const side of roundOrder(sides, i)) {
-      const result = await request2(side.url).then(
-        (s) => `${Math.round(s.ttfb)} ms`,
-        (err) => `failed (${firstLine(err)})`
-      );
-      warm.push(`${side.label} ${result}`);
+  const first = { base: [], head: [] };
+  const out = { base: [], head: [], failures: { base: [], head: [] }, first };
+  const phase = async (label, rounds, send) => {
+    const line = [];
+    for (let i = 0; i < rounds; i++) {
+      for (const side of roundOrder(sides, i)) {
+        const sample = await send(side.url).catch((err) => {
+          line.push(`${side.label} failed (${firstLine(err)})`);
+          return null;
+        });
+        first[side.name].push(sample);
+        if (sample) line.push(`${side.label} ${logLine(sample)}`);
+      }
     }
-  }
-  if (warm.length > 0) log3(`  ${path4} server warm-up: ${warm.join(", ")}`);
+    if (line.length > 0) log3(`  ${path4} server ${label}: ${line.join("; ")}`);
+  };
+  await phase("new connections", newConnections, newConnection);
+  await phase("warm-up", warmUp2, request2);
   for (let round2 = 0; round2 < samples; round2++) {
     const line = [];
     for (const side of roundOrder(sides, round2)) {
@@ -106228,14 +106332,18 @@ async function measureServer(run2) {
   if (run2.serverSamples === 0) return out;
   const headers = serverRequestHeaders(run2.device, run2.headers);
   for (const page of run2.pages) {
-    run2.log(`${page.path}: server time, ${SERVER_WARM_UP} warm-up and ${run2.serverSamples} requests per side`);
+    run2.log(
+      `${page.path}: server time, ${SERVER_NEW_CONNECTIONS} on new connections, ${SERVER_WARM_UP} warm-up and ${run2.serverSamples} measured requests per side`
+    );
     const samples = await sampleServer({
       path: page.path,
       baseUrl: run2.baseUrl,
       headUrl: run2.headUrl,
       samples: run2.serverSamples,
+      newConnections: SERVER_NEW_CONNECTIONS,
       warmUp: SERVER_WARM_UP,
       request: (url3) => timeRequest(url3, headers),
+      newConnection: (url3) => timeNewConnection(url3, headers),
       log: run2.log
     });
     out.set(page.path, samples);
@@ -106364,6 +106472,7 @@ async function run(env = process.env) {
       },
       pages: measured.pages,
       prodLoads: measured.prodLoads,
+      bundle: inputs.bundle,
       alpha: DEFAULT_ALPHA,
       durationMs: Date.now() - started,
       generatedAt: (/* @__PURE__ */ new Date()).toISOString()

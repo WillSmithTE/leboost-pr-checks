@@ -56,6 +56,14 @@ inputs:
     description: Fail the job when anything regressed. Off by default, the check only reports.
     required: false
     default: 'false'
+  base-bundle-bytes:
+    description: Optional size in bytes of main's server bundle (what a cold start loads), shown next to head-bundle-bytes. Never judged.
+    required: false
+    default: ''
+  head-bundle-bytes:
+    description: Optional size in bytes of this PR's server bundle.
+    required: false
+    default: ''
   chart-base-url:
     description: Where the trend chart images are drawn. Only for testing a chart server.
     required: false

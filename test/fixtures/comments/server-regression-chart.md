@@ -13,7 +13,8 @@
 
 | Metric | main | this PR | Change | prod |
 |---|---|---|---|---|
-| Server | 100 ms | 400 ms | **Slower** +300 ms (+300%)<br><sub>db 12 ms to 312 ms, 3 to 4 queries, 2 cold requests left out</sub> | n/a |
+| Server | 100 ms | 400 ms | **Slower** +300 ms (+300%)<br><sub>db 12 ms to 312 ms, 3 to 4 queries</sub> | n/a |
+| Cold start | 1.63 s, 2 of 43 | none, 0 of 43 | not judged | n/a |
 | LCP | 2.41 s | 2.43 s | +22 ms (+1%) | 2.41 s |
 | FCP | 1.80 s | 1.82 s | +16 ms (+1%) | 1.81 s |
 | CLS | 0.002 | 0.002 | 0.000 | 0.002 |
@@ -35,4 +36,4 @@ prod is for reference and never affects the result. It can load third-party tags
 
 </details>
 
-<sub>Report only, never fails the build. Medians of 8 cold mobile loads per side (3 on prod), interleaved, at 150 ms RTT, 1.6 Mbps down and 4x CPU. Server time from 30 warm requests per side, unthrottled. A change counts when it is significant (one-sided Mann-Whitney, p < 0.05) and larger than a per-metric floor. [CI run](https://github.com/acme/shop/actions/runs/123456) for `9f8e7d6`. By [Usero PR checks](https://github.com/usero-feedback/pr-checks).</sub>
+<sub>Report only, never fails the build. Medians of 8 cold mobile loads per side (3 on prod), interleaved, at 150 ms RTT, 1.6 Mbps down and 4x CPU. Server time from 30 warm requests per side, unthrottled, after 10 on new connections to catch cold starts. A change counts when it is significant (one-sided Mann-Whitney, p < 0.05) and larger than a per-metric floor. [CI run](https://github.com/acme/shop/actions/runs/123456) for `9f8e7d6`. By [Usero PR checks](https://github.com/usero-feedback/pr-checks).</sub>

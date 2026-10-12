@@ -62151,13 +62151,17 @@ function parseHeaders(raw) {
   }
   return out;
 }
-function parsePages(pathsRaw, interactRaw) {
+function parsePages(pathsRaw, interactRaw, prodPathsRaw) {
   const paths = words(pathsRaw);
   if (paths.length === 0) paths.push("/");
   for (const path4 of paths) {
     if (!path4.startsWith("/")) throw new InputError(`paths must start with /, got "${path4}".`);
   }
   if (new Set(paths).size !== paths.length) throw new InputError("paths lists the same path twice.");
+  const prodPaths = words(prodPathsRaw);
+  for (const path4 of prodPaths) {
+    if (!paths.includes(path4)) throw new InputError(`prod-paths names ${path4}, which is not in paths. List only paths from paths.`);
+  }
   const interactions = /* @__PURE__ */ new Map();
   for (const line of lines(interactRaw)) {
     const at2 = line.indexOf("::");
@@ -62166,7 +62170,11 @@ function parsePages(pathsRaw, interactRaw) {
     if (!paths.includes(path4)) throw new InputError(`interact names ${path4}, which is not in paths.`);
     interactions.set(path4, line.slice(at2 + 2).trim());
   }
-  return paths.map((path4) => ({ path: path4, interaction: interactions.get(path4) ?? null }));
+  return paths.map((path4) => ({
+    path: path4,
+    interaction: interactions.get(path4) ?? null,
+    prod: prodPaths.length === 0 || prodPaths.includes(path4)
+  }));
 }
 function parseInputs(get) {
   const input = (name, fallback = "") => {
@@ -62185,7 +62193,7 @@ function parseInputs(get) {
     headUrl: url("head-url", headRaw),
     baseUrl: url("base-url", baseRaw),
     prodUrl: prodRaw ? url("prod-url", prodRaw) : null,
-    pages: parsePages(input("paths"), get("interact")),
+    pages: parsePages(input("paths"), get("interact"), input("prod-paths")),
     rounds: int("rounds", input("rounds", "8"), { min: 3, max: MAX_ROUNDS }),
     serverSamples: serverSamples(input("server-samples", String(DEFAULT_SERVER_SAMPLES))),
     device: deviceRaw === "desktop" ? "desktop" : "mobile",
@@ -62796,12 +62804,13 @@ async function warmUp({ page, sides, measure, log: log3 }) {
 }
 async function samplePage({
   page,
-  sides,
+  sides: allSides,
   rounds,
   contextLoads = rounds,
   measure,
   log: log3
 }) {
+  const sides = page.prod ? allSides : allSides.filter((s) => !s.context);
   const samples = { base: [], head: [] };
   const failures = {};
   for (const side of sides) {
@@ -106394,7 +106403,7 @@ async function measureVitals(run2) {
     log3(`Warming up ${cold.map((s) => s.name).join(" and ")}`);
     await warmUp({ page: pages[0], sides: cold, measure, log: log3 });
     for (const page of pages) {
-      log3(`${page.path}: ${rounds} rounds of main and PR${prodLoads ? `, ${prodLoads} prod loads` : ""}`);
+      log3(`${page.path}: ${rounds} rounds of main and PR${prodLoads && page.prod ? `, ${prodLoads} prod loads` : ""}`);
       const { samples, failures } = await samplePage({ page, sides, rounds, contextLoads: prodLoads ?? 0, measure, log: log3 });
       results.push({ path: page.path, loads: samples, failures, server: server.get(page.path) ?? null });
     }

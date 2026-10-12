@@ -18,6 +18,8 @@ export interface Side {
 export interface PageSpec {
 	path: string
 	interaction: string | null
+	// Loads the context side (prod) on this path too; false for a path not in prod-paths.
+	prod: boolean
 }
 
 export type Measure = (url: string, page: PageSpec) => Promise<Metrics>
@@ -52,11 +54,11 @@ export interface PageSamples {
 	failures: Partial<Record<SideName, string[]>>
 }
 
-// Sides with context: true load in only contextLoads of the rounds. Returns per side one entry per load,
-// null when it failed (for main and the PR the index is the round), and the failure reasons.
+// Sides with context: true load in only contextLoads of the rounds, and never on a page with prod: false. Returns per side
+// one entry per load, null when it failed (for main and the PR the index is the round), and the failure reasons.
 export async function samplePage({
 	page,
-	sides,
+	sides: allSides,
 	rounds,
 	contextLoads = rounds,
 	measure,
@@ -69,6 +71,7 @@ export async function samplePage({
 	measure: Measure
 	log: Log
 }): Promise<PageSamples> {
+	const sides = page.prod ? allSides : allSides.filter(s => !s.context)
 	const samples: PageSamples['samples'] = { base: [], head: [] }
 	const failures: PageSamples['failures'] = {}
 	for (const side of sides) {

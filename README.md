@@ -71,8 +71,9 @@ image and a PR that changes nothing, with the comment this action posted on each
 | -------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `head-url`           | required              | The PR's preview URL.                                                                                                                     |
 | `base-url`           | required              | What to compare against, usually main's preview. The comment calls it "main". Any path on the URL is kept, so `https://x.dev/app` works. |
-| `prod-url`           |                       | Your production URL. Its medians are shown on one line under each page's table, for reference, and never change the result. Its loads are real production visits. |
+| `prod-url`           |                       | Your production URL. Its medians are shown on one line under each page's table (each page in `prod-paths`), for reference, and never change the result. Its loads are real production visits. |
 | `paths`              | `/`                   | Pages to measure. One per line, or separated by spaces or commas.                                                                        |
+| `prod-paths`         | every path            | Which of `paths` also load `prod-url`, in the same format. Leave out a page that does not exist on production (one seeded only on previews, say): it gets no prod loads and no prod line. Naming a path not in `paths` is a setup error. |
 | `rounds`             | `8`                   | Rounds per page, 3 to 50. Each round loads main and the PR once, in alternating order.                                                   |
 | `server-samples`     | `30`                  | Server time requests per side and page, 10 to 200, or `0` to turn server time off. See [Server time](#server-time).                      |
 | `device`             | `mobile`              | `mobile` (Lighthouse's Slow 4G and 4x CPU profile) or `desktop`.                                                                         |
@@ -325,8 +326,8 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
 - A run sends 2 warm-up loads plus `rounds` x 2 loads per path to the previews: 18 page views for one path at the defaults.
   Server time adds 45 plain GETs per side and path (10 on new connections, 5 warm-up, `server-samples` measured) that run
   no page scripts, so only server-side analytics count them.
-- `prod-url` loads are real visits to production and send real hits to your production analytics (3 per path per run). Leave
-  `prod-url` out if that matters.
+- `prod-url` loads are real visits to production and send real hits to your production analytics (3 per path in
+  `prod-paths` per run). Leave `prod-url` out if that matters.
 - The loads use an ordinary Chrome user agent from GitHub's runner IPs, so they are hard to filter out afterwards. A test
   analytics environment is the dependable fix.
 
@@ -344,7 +345,7 @@ scripts load, run and send their data, so a heavy or slow tag shows up in the nu
 ## Run time
 
 A load takes 2 to 10 seconds at the mobile profile, depending on the page. A run is 2 warm-up loads plus, per path,
-`rounds` x 2 loads, plus 3 loads per path when `prod-url` is set. Server time comes first and takes seconds: 90 requests
+`rounds` x 2 loads, plus 3 loads per path in `prod-paths` when `prod-url` is set. Server time comes first and takes seconds: 90 requests
 per path at your server's speed, plus a second or so for each cold start it meets. With the default 8 rounds on one path, the action took
 52 s on the demo's one-page static site and 93 s on a small marketing site's home page. On Usero (pages of about 1 MB) 8
 rounds on two paths with prod took 6.5 to 7 minutes.

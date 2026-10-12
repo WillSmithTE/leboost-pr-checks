@@ -88,13 +88,18 @@ function parseHeaders(raw: string): Record<string, string> {
 	return out
 }
 
-function parsePages(pathsRaw: string, interactRaw: string): PageSpec[] {
+function parsePages(pathsRaw: string, interactRaw: string, prodPathsRaw: string): PageSpec[] {
 	const paths = words(pathsRaw)
 	if (paths.length === 0) paths.push('/')
 	for (const path of paths) {
 		if (!path.startsWith('/')) throw new InputError(`paths must start with /, got "${path}".`)
 	}
 	if (new Set(paths).size !== paths.length) throw new InputError('paths lists the same path twice.')
+	// Empty means every path, so prod-url alone keeps loading prod everywhere.
+	const prodPaths = words(prodPathsRaw)
+	for (const path of prodPaths) {
+		if (!paths.includes(path)) throw new InputError(`prod-paths names ${path}, which is not in paths. List only paths from paths.`)
+	}
 	const interactions = new Map<string, string>()
 	for (const line of lines(interactRaw)) {
 		const at = line.indexOf('::')
@@ -103,7 +108,11 @@ function parsePages(pathsRaw: string, interactRaw: string): PageSpec[] {
 		if (!paths.includes(path)) throw new InputError(`interact names ${path}, which is not in paths.`)
 		interactions.set(path, line.slice(at + 2).trim())
 	}
-	return paths.map(path => ({ path, interaction: interactions.get(path) ?? null }))
+	return paths.map(path => ({
+		path,
+		interaction: interactions.get(path) ?? null,
+		prod: prodPaths.length === 0 || prodPaths.includes(path),
+	}))
 }
 
 export function parseInputs(get: GetInput): Inputs {
@@ -124,7 +133,7 @@ export function parseInputs(get: GetInput): Inputs {
 		headUrl: url('head-url', headRaw),
 		baseUrl: url('base-url', baseRaw),
 		prodUrl: prodRaw ? url('prod-url', prodRaw) : null,
-		pages: parsePages(input('paths'), get('interact')),
+		pages: parsePages(input('paths'), get('interact'), input('prod-paths')),
 		rounds: int('rounds', input('rounds', '8'), { min: 3, max: MAX_ROUNDS }),
 		serverSamples: serverSamples(input('server-samples', String(DEFAULT_SERVER_SAMPLES))),
 		device: deviceRaw === 'desktop' ? 'desktop' : 'mobile',

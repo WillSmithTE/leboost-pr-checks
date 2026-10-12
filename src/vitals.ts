@@ -81,7 +81,7 @@ export async function measureVitals(run: VitalsRun): Promise<VitalsOutput> {
 		log(`Warming up ${cold.map(s => s.name).join(' and ')}`)
 		await warmUp({ page: pages[0], sides: cold, measure, log })
 		for (const page of pages) {
-			log(`${page.path}: ${rounds} rounds of main and PR${prodLoads ? `, ${prodLoads} prod loads` : ''}`)
+			log(`${page.path}: ${rounds} rounds of main and PR${prodLoads && page.prod ? `, ${prodLoads} prod loads` : ''}`)
 			const { samples, failures } = await samplePage({ page, sides, rounds, contextLoads: prodLoads ?? 0, measure, log })
 			results.push({ path: page.path, loads: samples, failures, server: server.get(page.path) ?? null })
 		}

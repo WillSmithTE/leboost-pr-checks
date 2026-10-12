@@ -11,7 +11,7 @@ describe('parseInputs', () => {
 			headUrl: 'https://pr-7.app.test',
 			baseUrl: 'https://main.app.test',
 			prodUrl: null,
-			pages: [{ path: '/', interaction: null }],
+			pages: [{ path: '/', interaction: null, prod: true }],
 			rounds: 8,
 			serverSamples: 30,
 			device: 'mobile',
@@ -47,13 +47,24 @@ describe('parseInputs', () => {
 			rounds: '10',
 		})
 		expect(inputs.pages).toEqual([
-			{ path: '/', interaction: null },
-			{ path: '/docs', interaction: 'button[aria-label="Open menu"]' },
-			{ path: '/pricing', interaction: null },
+			{ path: '/', interaction: null, prod: true },
+			{ path: '/docs', interaction: 'button[aria-label="Open menu"]', prod: true },
+			{ path: '/pricing', interaction: null, prod: true },
 		])
 		expect(inputs.headers).toEqual({ 'x-vercel-protection-bypass': 'abc: def', 'x-vercel-set-bypass-cookie': 'true' })
 		expect(inputs.device).toBe('desktop')
 		expect(inputs.rounds).toBe(10)
+	})
+
+	it('loads prod only on the paths in prod-paths, and on every path when it is empty', () => {
+		const pages = (values: Record<string, string>) => parse({ ...minimal, 'prod-url': 'https://app.test', paths: '/ /b/fieldnote /docs', ...values }).pages
+		expect(pages({ 'prod-paths': '/\n/docs' }).map(p => [p.path, p.prod])).toEqual([
+			['/', true],
+			['/b/fieldnote', false],
+			['/docs', true],
+		])
+		expect(pages({ 'prod-paths': ' ' }).every(p => p.prod)).toBe(true)
+		expect(pages({}).every(p => p.prod)).toBe(true)
 	})
 
 	it('takes a server time request count, and 0 to turn it off', () => {
@@ -73,6 +84,8 @@ describe('parseInputs', () => {
 			[{ ...minimal, paths: 'docs' }, /paths must start with \//],
 			[{ ...minimal, paths: '/ /' }, /paths lists the same path twice/],
 			[{ ...minimal, interact: '/docs::button' }, /interact names \/docs, which is not in paths/],
+			[{ ...minimal, paths: '/ /docs', 'prod-paths': '/ /pricing' }, /prod-paths names \/pricing, which is not in paths/],
+			[{ ...minimal, 'prod-paths': 'docs' }, /prod-paths names docs, which is not in paths/],
 			[{ ...minimal, comment: 'yes' }, /comment must be true or false/],
 			[{ ...minimal, headers: 'no colon here' }, /headers expects one "Name: value" per line/],
 		]

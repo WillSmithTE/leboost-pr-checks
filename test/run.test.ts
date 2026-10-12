@@ -17,7 +17,7 @@ describe('samplePage', () => {
 			if (url.startsWith('https://pr.test') && calls.length === 2) throw new Error('page.goto: Timeout\nCall log:\n  - navigating')
 			return { LCP: calls.length }
 		}
-		const { samples, failures } = await samplePage({ page: { path: '/docs', interaction: null }, sides, rounds: 3, measure, log: quiet })
+		const { samples, failures } = await samplePage({ page: { path: '/docs', interaction: null, prod: true }, sides, rounds: 3, measure, log: quiet })
 		expect(calls.map(u => new URL(u).host[0])).toEqual(['m', 'p', 'p', 'p', 'p', 'm', 'p', 'm', 'p'])
 		expect(calls[1]).toBe('https://pr.test/docs')
 		expect(failures).toEqual({ base: [], head: ['page.goto: Timeout'], prod: [] })
@@ -32,7 +32,7 @@ describe('samplePage', () => {
 			return {}
 		}
 		const { samples } = await samplePage({
-			page: { path: '/', interaction: null },
+			page: { path: '/', interaction: null, prod: true },
 			sides: [base, head, { ...prod, context: true }],
 			rounds: 4,
 			contextLoads: 2,
@@ -43,6 +43,27 @@ describe('samplePage', () => {
 		expect(calls.join(' ')).toBe('b h P h b b h h P b')
 		expect(samples.prod).toHaveLength(2)
 		expect(samples.base).toHaveLength(4)
+	})
+
+	it('never loads the context side on a page outside prod-paths, and reports no prod samples or failures for it', async () => {
+		const calls: string[] = []
+		const measure = async (url: string): Promise<Metrics> => {
+			calls.push(url)
+			if (url.includes('prod')) throw new Error('HTTP 404')
+			return {}
+		}
+		const { samples, failures } = await samplePage({
+			page: { path: '/b/fieldnote', interaction: null, prod: false },
+			sides: [base, head, { ...prod, context: true }],
+			rounds: 4,
+			contextLoads: 3,
+			measure,
+			log: quiet,
+		})
+		expect(calls.some(u => u.includes('prod'))).toBe(false)
+		expect(calls).toHaveLength(8)
+		expect(samples).toEqual({ base: [{}, {}, {}, {}], head: [{}, {}, {}, {}] })
+		expect(failures).toEqual({ base: [], head: [] })
 	})
 })
 
@@ -60,7 +81,7 @@ describe('warmUp', () => {
 		const calls: string[] = []
 		const lines: string[] = []
 		await warmUp({
-			page: { path: '/', interaction: null },
+			page: { path: '/', interaction: null, prod: true },
 			sides,
 			measure: async url => {
 				calls.push(url)

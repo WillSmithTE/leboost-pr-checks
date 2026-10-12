@@ -20,6 +20,10 @@ inputs:
     description: Pages to measure, appended to each URL. One per line, or separated by spaces or commas.
     required: false
     default: /
+  prod-paths:
+    description: Which of paths also load prod-url, in the same format. Empty means every path. Leave out a page that does not exist on production, such as one seeded only on previews.
+    required: false
+    default: ''
   rounds:
     description: Rounds per page. Each round loads main and the PR once. 3 to 50. Each extra round adds two page loads per path.
     required: false

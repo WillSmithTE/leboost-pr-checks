@@ -130,6 +130,8 @@ interface ScenarioOptions {
 	home?: Centre
 	docs?: Centre
 	prod?: boolean
+	// Pages that load prod, as prod-paths sets; every page when left out.
+	prodPaths?: string[]
 	missing?: Record<string, Partial<Record<keyof Centre, number[]>>>
 	// Every PR load failed, as when the preview 500s.
 	headDown?: boolean
@@ -137,12 +139,12 @@ interface ScenarioOptions {
 	bundle?: BuildInput['bundle']
 }
 
-function scenario({ home = HOME, docs = DOCS, prod = true, missing = {}, headDown = false, server = SERVER, bundle = null }: ScenarioOptions): RunResult {
+function scenario({ home = HOME, docs = DOCS, prod = true, prodPaths, missing = {}, headDown = false, server = SERVER, bundle = null }: ScenarioOptions): RunResult {
 	const headFailures = headDown ? Array<string>(8).fill('HTTP 500') : []
 	const page = (path: string, base: Centre, head: Centre, prodCentre: Centre): PageInput => {
 		const headLoads: Load[] = headDown ? Array<Load>(8).fill(null) : loads(head, missing[path], HEAD_JITTER)
 		const serverRun = headDown ? { ...server[path], head: Array<ServerLoad>(SERVER_REQUESTS).fill(null), failures: { base: [], head: Array<string>(SERVER_REQUESTS).fill('HTTP 500') } } : server[path]
-		if (!prod) return { path, loads: { base: loads(base), head: headLoads }, failures: { base: [], head: headFailures }, server: serverRun }
+		if (!prod || !(prodPaths?.includes(path) ?? true)) return { path, loads: { base: loads(base), head: headLoads }, failures: { base: [], head: headFailures }, server: serverRun }
 		return {
 			path,
 			loads: { base: loads(base), head: headLoads, prod: loads(prodCentre, {}, PROD_JITTER) },
@@ -372,6 +374,16 @@ describe('renderComment', () => {
 		// No percent of a zero base.
 		expect(md).toContain('```diff\n- TBT  /docs  81 ms slower\n```')
 		expect(md).toContain('| TBT | 0 ms | 81 ms | **Slower** +81 ms |')
+	})
+
+	it('has no prod line and no prod failure for a page outside prod-paths', () => {
+		const result = scenario({ prodPaths: ['/'] })
+		const md = render(result)
+		expect(md).toContain('<sub>prod for reference: LCP 2.41 s, FCP 1.81 s, CLS 0.002, TBT 744 ms</sub>')
+		expect(md.match(/prod for reference/g)).toHaveLength(1)
+		expect(md.slice(md.indexOf('**`/docs`**'))).not.toMatch(/\bprod\b/)
+		expect(md).not.toContain('prod failed')
+		expect(result.pages[1].metrics.LCP?.summary.vsProd).toBeUndefined()
 	})
 
 	it('says when a metric was dropped instead of hiding it', () => {

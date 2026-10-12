@@ -407,24 +407,27 @@ Smaller pages have smaller floors, so smaller changes can count; the comment sta
 static page a heavier hero image (+107 KB) came out as +531 ms LCP and was flagged.
 
 **Server time** was measured the same way on 2026-10-12 with `npm run power` (`scripts/power-server.ts`): on a GitHub
-runner, 15 runs per page, each the action's warm sampling (3 warm-up, then 30 interleaved requests per side), against
-Usero's main preview as main and, as the PR, either the same preview or a second deployment of the same code with its own
-Worker and database. Every side goes through a local proxy, and the injected rows hold the PR's responses for 100 or 300 ms.
-Each cell is runs with the verdict, then the rate over 1000 runs resampled from all rounds, at the 75 ms floor:
+runner, 15 runs per page, each the action's warm sampling (5 kept-alive connections per side with one warm-up each, then
+30 requests per side rotating over them), against Usero's main preview as main and, as the PR, either the same preview or a
+second deployment of the same code with its own Worker and database. Every side goes through a local proxy that keeps one
+upstream connection per incoming one, and the injected rows hold the PR's responses for 100 or 300 ms. Each cell is runs
+with the verdict, then the rate over 1000 runs resampled from all rounds, at the 75 ms floor:
 
 | `/` then `/docs`               | main against main                | main against a second deployment |
 | ------------------------------ | -------------------------------- | -------------------------------- |
 | Nothing (A/A): a false verdict | 0 of 15, 0 of 15 (0%, 0%)        | 0 of 15, 0 of 15 (0%, 0%)        |
-| +100 ms server time caught     | 15 of 15, 15 of 15 (99.9%, 100%) | 14 of 15, 15 of 15 (100%, 100%)  |
+| +100 ms server time caught     | 15 of 15, 13 of 15 (99.6%, 99.9%) | 10 of 15, 13 of 15 (74%, 88%)   |
 | +300 ms server time caught     | 15 of 15, 15 of 15 (100%)        | 15 of 15, 15 of 15 (100%)        |
 
-Warm medians per run stayed within 68 to 135 ms on `/` and 48 to 74 ms on `/docs`. The two deployments differed by 16 ms
-and 6 ms in these runs, but by 58 ms and then 34 ms on `/` in two later runs of Usero PR #297 (same code, with a 50 ms floor
-the first of those read as 58 ms faster), which is why the floor is 75 ms. The preview first-byte swings that made page-load
-TTFB useless (0.1 s against 1.3 to 1.9 s) did not show up on warm connections; on new connections they did, as cold starts
-(1.4 to 2.9 s), which is what the Cold start row reports. On the demo, a server 300 ms slower per page was flagged (PR #4).
-Neither Usero page queries its database for an anonymous visitor, so these runs cover rendering and the network, not query
-time.
+The second deployment answered 25 ms (`/`) and 16 ms (`/docs`) faster than main's with the same code, so its +100 ms read
+as about +75 ms and +81 ms, right at the floor: that is the column a real PR sits in, and +100 ms there is caught about
+three times in four. An earlier version used one connection per side and saw two deployments 34 to 58 ms apart on `/`
+(Usero PR #297; with the then 50 ms floor the first of those read as 58 ms faster), which is why the floor is 75 ms and the
+requests rotate. Warm medians per run stayed within 96 to 167 ms on `/` and 62 to 100 ms on `/docs`. The preview first-byte
+swings that made page-load TTFB useless (0.1 s against 1.3 to 1.9 s) did not show up on warm connections; on new
+connections they did, as cold starts (1.3 to 2.9 s), which is what the Cold start row reports. On the demo, a server 300 ms
+slower per page was flagged (PR #4). Neither Usero page queries its database for an anonymous visitor, so these runs cover
+rendering and the network, not query time.
 
 ## Limits
 

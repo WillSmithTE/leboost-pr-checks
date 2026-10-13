@@ -12,6 +12,7 @@ import {
 } from './config'
 import type { Load, PageSamples, SideName } from './run'
 import { chartImage, type History } from './chart'
+import type { BaseAhead } from './github'
 import type { ServerLoad, ServerSample, ServerSamples } from './server'
 import { compareSamples, type Comparison, median, type Verdict } from './stats'
 
@@ -49,6 +50,8 @@ export interface ServerDetail {
 	static: StaticSides
 	db: MedianPair | null
 	queries: MedianPair | null
+	// Where each side's database runs, from Server-Timing db;desc; null when neither side says. Two places: not judged.
+	dbLocation: { base: string | null; head: string | null } | null
 	coldStarts: ColdStarts
 	requests: { base: ServerLoad[]; head: ServerLoad[]; first: { base: ServerLoad[]; head: ServerLoad[] } }
 }
@@ -129,6 +132,8 @@ export interface RunResult extends RunMeta {
 	version: 1
 	pages: PageResult[]
 	bundle: BundleSizes | null
+	// Commits main gained after this PR's base, read when the run ends; null when unknown or not a PR.
+	baseAhead?: BaseAhead | null
 	meta: {
 		alpha: number
 		prodLoads: number | null
@@ -260,6 +265,16 @@ function medianPair(base: readonly ServerSample[], head: readonly ServerSample[]
 	return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) }
 }
 
+// The database location a side's requests named, when they all name the same one.
+function dbLocation(samples: readonly ServerSample[]): string | null {
+	const named = new Set(samples.flatMap(s => (s.dbLocation ? [s.dbLocation] : [])))
+	return named.size === 1 ? [...named][0] : null
+}
+
+// Query time is mostly the trip to the database, so two databases in different places cannot be compared.
+export const databasesApart = (d: Pick<ServerDetail, 'dbLocation'> | undefined): boolean =>
+	Boolean(d?.dbLocation?.base && d.dbLocation.head && d.dbLocation.base !== d.dbLocation.head)
+
 const goodLoads = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
 const sendsTiming = (s: ServerSample): boolean => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null
 
@@ -323,6 +338,9 @@ export function summariseServer(
 		// Static now is the improvement, whatever the test says, unless the static first byte is not lower. Static before is never a verdict.
 		summary.verdict = statics.head && summary.verdict !== 'regressed' && summary.headMedian <= summary.baseMedian ? 'improved' : 'no-change'
 	}
+	const where = { base: dbLocation(b.warm), head: dbLocation(h.warm) }
+	const located = where.base !== null || where.head !== null ? where : null
+	if (databasesApart({ dbLocation: located })) summary.verdict = 'no-change'
 	return {
 		base: bKept,
 		head: hKept,
@@ -332,6 +350,7 @@ export function summariseServer(
 			static: statics,
 			db: medianPair(b.warm, h.warm, 'db'),
 			queries: medianPair(b.warm, h.warm, 'queries'),
+			dbLocation: located,
 			coldStarts: {
 				source: { base: marked('base') ? 'isolate' : 'outliers', head: marked('head') ? 'isolate' : 'outliers' },
 				base: b.cold,
@@ -600,6 +619,13 @@ function serverDetail(d: ServerDetail, verdict: Verdict): string | null {
 	return `Server ${parts.join(', ')}`
 }
 
+// Two databases in different places: both times stay in the row, and this says why it has no verdict.
+function databasesApartDetail(d: ServerDetail): string | null {
+	if (!databasesApart(d) || !d.dbLocation) return null
+	const db = d.db ? ` (db ${formatValue('Server', d.db.baseMedian)} to ${formatValue('Server', d.db.headMedian)})` : ''
+	return `Database in ${d.dbLocation.base} on main and ${d.dbLocation.head} on this PR${db}, so server time is not judged`
+}
+
 // Cold starts, measured but never judged: too few land per run for a test. Null when neither side had one.
 function coldStartDetail(c: ColdStarts): string | null {
 	if (c.base.length === 0 && c.head.length === 0) return null
@@ -668,7 +694,7 @@ function pageTable(page: PageResult, hasProd: boolean): string[] {
 				? formatChange(metric, t.baseMedian, t.headMedian, null)
 				: `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`
 		// A static side's first byte is not server time, so a page that stopped being static gets no verdict and no sign.
-		if (st?.base && !st.head) change = 'not judged'
+		if ((st?.base && !st.head) || databasesApart(m.server)) change = 'not judged'
 		const cell = (side: 'base' | 'head', v: number): string => `${formatValue(metric, v)}${st?.[side] ? `${NBSP}(static)` : ''}`
 		return `| ${[metric, cell('base', s.baseMedian), cell('head', s.headMedian), change].join(' | ')} |`
 	})
@@ -684,12 +710,18 @@ function pageTable(page: PageResult, hasProd: boolean): string[] {
 		firstByteDetail(shown),
 		staticNote,
 		server?.server && !oneSided ? serverDetail(server.server, server.summary.verdict) : null,
+		server?.server ? databasesApartDetail(server.server) : null,
 		server?.server ? coldStartDetail(server.server.coldStarts) : null,
 		hasProd && prod.length > 0 ? `prod for reference: ${prod.join(', ')}` : null,
 	].filter((n): n is string => n !== null)
 	const lines = [`**${code(page.path)}**`, '', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows]
 	if (notes.length > 0) lines.push('', `<sub>${notes.join('<br>')}</sub>`)
 	return lines
+}
+
+// main's preview can run commits this PR's build lacks; a change they made would read as this PR's.
+function aheadLine({ commits }: BaseAhead): string {
+	return `<sub>main is ${plural(commits, 'commit')} past this PR's base, and its preview may already run them, so a change above can be theirs. Merge main and push to compare like for like.</sub>`
 }
 
 export interface CommentOptions {
@@ -724,6 +756,8 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 
 	// Above the fold: the title, and the changes when there are any. Everything else is in the fold.
 	if (flags.length > 0) lines.push(...diffBlock(flags), '')
+	const ahead = flags.length > 0 && result.baseAhead && result.baseAhead.commits > 0 ? result.baseAhead : null
+	if (ahead) lines.push(aheadLine(ahead), '')
 
 	// What main or this PR could not measure can hide a regression, so it stays in view; prod failures fold away.
 	const gaps = gapLines(result)
@@ -735,6 +769,7 @@ export function renderComment(result: RunResult, { failOnRegression = false, his
 		lines.push(...charts(flags, history, chartBaseUrl))
 		for (const page of pages) lines.push(...pageTable(page, hasProd), '')
 		if (result.bundle) lines.push(bundleLine(result.bundle), '')
+		if (ahead && ahead.titles.length > 0) lines.push(`<sub>Newest on main since this PR's base: ${ahead.titles.map(t => `"${t}"`).join(', ')}.</sub>`, '')
 		if (folded.length > 0) lines.push(...folded.map(g => g.line), '')
 		lines.push('</details>', '')
 	}

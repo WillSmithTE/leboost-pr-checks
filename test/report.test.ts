@@ -99,6 +99,8 @@ interface ServerTimeCentre {
 	// The 13 requests before the measured ones (10 new connections, 3 warm-up): those that were cold, and how much slower.
 	firstCold?: number[]
 	coldMs?: number
+	// Server-Timing db;desc on every request.
+	dbLocation?: string
 }
 const SERVER_REQUESTS = 30
 const FIRST_REQUESTS = 13
@@ -108,7 +110,7 @@ function serverTimeSide(side: 'base' | 'head', c: ServerTimeCentre, count = SERV
 		const cold = coldAt.includes(i)
 		const ttfb = ms + (side === 'base' ? ((i * 7) % 11) - 5 : ((i * 5 + 3) % 11) - 5) * 3 + (cold ? coldMs : 0)
 		const isolate = marker ? (cold ? 'cold' : 'warm') : null
-		return { ttfb, total: total ? ttfb - 20 : null, db: db ?? null, queries: queries ?? null, isolate }
+		return { ttfb, total: total ? ttfb - 20 : null, db: db ?? null, queries: queries ?? null, dbLocation: c.dbLocation ?? null, isolate }
 	})
 }
 const serverSamples = (base: ServerTimeCentre, head: ServerTimeCentre = base): ServerSamples => ({
@@ -244,6 +246,21 @@ const SCENARIOS: Record<string, RunResult> = {
 			'/docs': serverSamples(DOCS_SSR),
 		},
 	}),
+	// The same 5 queries, but the PR's database runs in another data centre: 300 ms slower, shown and not judged.
+	'database-apart': scenario({
+		server: {
+			'/': serverSamples(
+				{ ms: 220, db: 55, queries: 5, marker: true, dbLocation: 'DFW' },
+				{ ms: 520, db: 326, queries: 5, marker: true, dbLocation: 'SJC' },
+			),
+			'/docs': serverSamples(DOCS_SSR),
+		},
+	}),
+	// main moved on after the PR's base, and its preview already runs a faster home page.
+	'main-ahead': {
+		...scenario({ home: { ...HOME, LCP: 2950 } }),
+		baseAhead: { ref: 'main', commits: 6, titles: ['Hero image as AVIF', 'Blog index from the loader', 'Docs: QA shots'] },
+	},
 	// `/docs` is a prerendered file on both sides (no Server-Timing at all): no Server or cold start rows for it.
 	'static-both': scenario({ server: { '/': SERVER['/'], '/docs': serverSamples({ ms: 25 }) } }),
 	// `/docs` was server rendered on main (Server-Timing total) and is a static file on the PR: an improvement.
@@ -501,6 +518,28 @@ describe('renderComment', () => {
 			'<sub>Server db 12 ms to 312 ms, 3 to 4 queries<br>Cold starts 1.63 s to none (2 and 0 of 43), not judged<br>prod for reference:',
 		)
 		expect(countVerdicts(result)).toEqual({ regressions: 1, improvements: 0 })
+	})
+
+	it('shows both server times without a verdict when the databases run in different places, and says why', () => {
+		const result = SCENARIOS['database-apart']
+		expect(result.pages[0].metrics.Server?.summary.verdict).toBe('no-change')
+		const md = render(result)
+		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
+		expect(md).toContain('| Server | 220 ms | 520 ms | not judged |')
+		expect(md).toContain('<sub>Database in DFW on main and SJC on this PR (db 55 ms to 326 ms), so server time is not judged')
+		expect(verdictKey(result)).toBe('clean')
+	})
+
+	it('says when main is past the PR base, only when something changed, with the newest commits in the fold', () => {
+		const md = render(SCENARIOS['main-ahead'])
+		expect(md).toContain(
+			"```\n\n<sub>main is 6 commits past this PR's base, and its preview may already run them, so a change above can be theirs. Merge main and push to compare like for like.</sub>\n\n<details open>",
+		)
+		expect(md).toContain('<sub>Newest on main since this PR\'s base: "Hero image as AVIF", "Blog index from the loader", "Docs: QA shots".</sub>')
+		const quiet = render({ ...SCENARIOS.clean, baseAhead: { ref: 'main', commits: 6, titles: ['Hero image as AVIF'] } })
+		expect(quiet).toBe(render(SCENARIOS.clean))
+		const level = render({ ...SCENARIOS['one-regression'], baseAhead: { ref: 'main', commits: 0, titles: [] } })
+		expect(level).toBe(render(SCENARIOS['one-regression']))
 	})
 
 	it('shows database time only under a judged Server change on a page that queries', () => {

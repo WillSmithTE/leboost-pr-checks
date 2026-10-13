@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import * as core from '@actions/core'
 import { findChrome } from './chrome'
 import { DEFAULT_ALPHA, DEVICES } from './config'
-import { contextFromEvent, type Env, findPullRequest, GitHubApi, posInt, readEvent, type RunContext, upsertComment } from './github'
+import { baseAhead, contextFromEvent, type Env, findPullRequest, GitHubApi, posInt, readEvent, type RunContext, upsertComment } from './github'
 import { artifactName, buildHistory, loadPastRuns } from './history'
 import { InputError, type Inputs, parseInputs } from './inputs'
 import { buildResult, commentFooter, countVerdicts, renderComment, type RunResult, verdictKey } from './report'
@@ -117,6 +117,8 @@ export async function run(env: Env = process.env): Promise<void> {
 			durationMs: Date.now() - started,
 			generatedAt: new Date().toISOString(),
 		})
+		// Read after measuring, so a main deploy during the run counts.
+		if (api && ctx.repo && ctx.baseSha && ctx.baseRef) result.baseAhead = await baseAhead(api, ctx.repo, ctx.baseSha, ctx.baseRef, log)
 		const { runs, note } = await pastRuns
 		log(note)
 		comment = renderComment(result, {

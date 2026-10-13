@@ -61758,13 +61758,14 @@ function contextFromEvent(env, event) {
   const pr = at(event, "pull_request");
   const workflowRun = at(event, "workflow_run");
   const fallbackBranch = str(env.GITHUB_HEAD_REF) ?? str(env.GITHUB_REF_NAME);
-  const base = { repo, eventName, ciRunUrl, apiUrl: env.GITHUB_API_URL ?? "https://api.github.com" };
+  const base = { repo, eventName, ciRunUrl, apiUrl: env.GITHUB_API_URL ?? "https://api.github.com", baseRef: null };
   if (isRecord(pr)) {
     return {
       ...base,
       prNumber: posInt(pr.number),
       headSha: str(at(pr, "head", "sha")) ?? env.GITHUB_SHA ?? "",
       baseSha: str(at(pr, "base", "sha")),
+      baseRef: str(at(pr, "base", "ref")),
       branch: str(at(pr, "head", "ref")) ?? fallbackBranch
     };
   }
@@ -61853,6 +61854,26 @@ async function findPullRequest(api, repo, sha, log3) {
     return posInt(at(match, "number"));
   } catch (err) {
     log3(`Could not look up the pull request: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+var AHEAD_TITLES = 3;
+async function baseAhead(api, repo, baseSha, baseRef, log3) {
+  try {
+    const { status, data } = await api.request("GET", `/repos/${repo}/compare/${baseSha}...${encodeURIComponent(baseRef)}`);
+    const commits = at(data, "commits");
+    const aheadBy = at(data, "ahead_by");
+    if (status !== 200 || typeof aheadBy !== "number" || !Array.isArray(commits)) {
+      log3(`Could not compare this PR's base with ${baseRef} (HTTP ${status}).`);
+      return null;
+    }
+    const titles = commits.slice(-AHEAD_TITLES).reverse().flatMap((c) => {
+      const title = str(at(c, "commit", "message"))?.split("\n")[0].trim();
+      return title ? [title] : [];
+    });
+    return { ref: baseRef, commits: aheadBy, titles };
+  } catch (err) {
+    log3(`Could not compare this PR's base with ${baseRef}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -62450,6 +62471,11 @@ function medianPair(base, head, key) {
   if (pair.baseMedian === null && pair.headMedian === null) return null;
   return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) };
 }
+function dbLocation(samples) {
+  const named = new Set(samples.flatMap((s) => s.dbLocation ? [s.dbLocation] : []));
+  return named.size === 1 ? [...named][0] : null;
+}
+var databasesApart = (d) => Boolean(d?.dbLocation?.base && d.dbLocation.head && d.dbLocation.base !== d.dbLocation.head);
 var goodLoads = (side) => side.filter((s) => s !== null);
 var sendsTiming = (s) => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null;
 var sendsServerTiming = (samples) => [samples.base, samples.head, samples.first?.base ?? [], samples.first?.head ?? []].some((side) => goodLoads(side).some(sendsTiming));
@@ -62494,6 +62520,9 @@ function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base
   if (anyStatic) {
     summary2.verdict = statics.head && summary2.verdict !== "regressed" && summary2.headMedian <= summary2.baseMedian ? "improved" : "no-change";
   }
+  const where2 = { base: dbLocation(b.warm), head: dbLocation(h.warm) };
+  const located = where2.base !== null || where2.head !== null ? where2 : null;
+  if (databasesApart({ dbLocation: located })) summary2.verdict = "no-change";
   return {
     base: bKept,
     head: hKept,
@@ -62503,6 +62532,7 @@ function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base
       static: statics,
       db: medianPair(b.warm, h.warm, "db"),
       queries: medianPair(b.warm, h.warm, "queries"),
+      dbLocation: located,
       coldStarts: {
         source: { base: marked("base") ? "isolate" : "outliers", head: marked("head") ? "isolate" : "outliers" },
         base: b.cold,
@@ -62696,6 +62726,11 @@ function serverDetail(d, verdict) {
   if (d.queries) parts.push(`${queryCount(d.queries.baseMedian)} to ${queryCount(d.queries.headMedian)} queries`);
   return `Server ${parts.join(", ")}`;
 }
+function databasesApartDetail(d) {
+  if (!databasesApart(d) || !d.dbLocation) return null;
+  const db = d.db ? ` (db ${formatValue("Server", d.db.baseMedian)} to ${formatValue("Server", d.db.headMedian)})` : "";
+  return `Database in ${d.dbLocation.base} on main and ${d.dbLocation.head} on this PR${db}, so server time is not judged`;
+}
 function coldStartDetail(c) {
   if (c.base.length === 0 && c.head.length === 0) return null;
   const at2 = (values2) => values2.length > 0 ? formatValue("Server", median(values2)) : "none";
@@ -62742,7 +62777,7 @@ function pageTable(page, hasProd) {
     const t = tested(metric, s);
     const st2 = m.server?.static;
     let change = s.verdict === "no-change" ? formatChange(metric, t.baseMedian, t.headMedian, null) : `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`;
-    if (st2?.base && !st2.head) change = "not judged";
+    if (st2?.base && !st2.head || databasesApart(m.server)) change = "not judged";
     const cell = (side, v) => `${formatValue(metric, v)}${st2?.[side] ? `${NBSP}(static)` : ""}`;
     return `| ${[metric, cell("base", s.baseMedian), cell("head", s.headMedian), change].join(" | ")} |`;
   });
@@ -62758,12 +62793,16 @@ function pageTable(page, hasProd) {
     firstByteDetail(shown),
     staticNote,
     server?.server && !oneSided ? serverDetail(server.server, server.summary.verdict) : null,
+    server?.server ? databasesApartDetail(server.server) : null,
     server?.server ? coldStartDetail(server.server.coldStarts) : null,
     hasProd && prod.length > 0 ? `prod for reference: ${prod.join(", ")}` : null
   ].filter((n) => n !== null);
   const lines2 = [`**${code(page.path)}**`, "", `| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`, ...rows];
   if (notes.length > 0) lines2.push("", `<sub>${notes.join("<br>")}</sub>`);
   return lines2;
+}
+function aheadLine({ commits }) {
+  return `<sub>main is ${plural(commits, "commit")} past this PR's base, and its preview may already run them, so a change above can be theirs. Merge main and push to compare like for like.</sub>`;
 }
 var MAX_CHARTS = 3;
 function charts(flags, history, baseUrl2) {
@@ -62784,6 +62823,8 @@ function renderComment(result, { failOnRegression = false, history, chartBaseUrl
   const flags = [...flagged(pages, "regressed"), ...flagged(pages, "improved")];
   const lines2 = [`### ${commentTitle(result)}`, ""];
   if (flags.length > 0) lines2.push(...diffBlock(flags), "");
+  const ahead = flags.length > 0 && result.baseAhead && result.baseAhead.commits > 0 ? result.baseAhead : null;
+  if (ahead) lines2.push(aheadLine(ahead), "");
   const gaps = gapLines(result);
   const incomplete = (list) => list.length > 0 ? ["**Incomplete data**", "", ...list.map((g) => g.line), ""] : [];
   const folded = pages.length > 0 ? gaps.filter((g) => g.prodOnly) : [];
@@ -62793,6 +62834,7 @@ function renderComment(result, { failOnRegression = false, history, chartBaseUrl
     lines2.push(...charts(flags, history, chartBaseUrl));
     for (const page of pages) lines2.push(...pageTable(page, hasProd), "");
     if (result.bundle) lines2.push(bundleLine(result.bundle), "");
+    if (ahead && ahead.titles.length > 0) lines2.push(`<sub>Newest on main since this PR's base: ${ahead.titles.map((t) => `"${t}"`).join(", ")}.</sub>`, "");
     if (folded.length > 0) lines2.push(...folded.map((g) => g.line), "");
     lines2.push("</details>", "");
   }
@@ -106240,7 +106282,7 @@ function nonNegative(raw) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 function parseServerTiming(header) {
-  const out = { total: null, db: null, queries: null, isolate: null };
+  const out = { total: null, db: null, queries: null, dbLocation: null, isolate: null };
   if (!header) return out;
   let dbEntries = 0;
   let dbDur = null;
@@ -106262,6 +106304,8 @@ function parseServerTiming(header) {
       if (dur !== null) dbDur = (dbDur ?? 0) + dur;
       const count = nonNegative(params.get("count"));
       if (count !== null) dbCount = (dbCount ?? 0) + count;
+      const where2 = params.get("desc")?.trim() ?? "";
+      if (out.dbLocation === null && /^[\w .:-]{1,40}$/.test(where2)) out.dbLocation = where2;
     }
   }
   out.db = dbDur;
@@ -106319,6 +106363,7 @@ function logLine(s) {
   if (s.total !== null) parts.push(`total ${Math.round(s.total)} ms`);
   if (s.db !== null) parts.push(`db ${Math.round(s.db)} ms`);
   if (s.queries !== null) parts.push(`${s.queries} queries`);
+  if (s.dbLocation !== null) parts.push(`db in ${s.dbLocation}`);
   return parts.join(", ");
 }
 async function sampleServer({
@@ -106531,6 +106576,7 @@ async function run(env = process.env) {
       durationMs: Date.now() - started,
       generatedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
+    if (api && ctx.repo && ctx.baseSha && ctx.baseRef) result.baseAhead = await baseAhead(api, ctx.repo, ctx.baseSha, ctx.baseRef, log2);
     const { runs, note } = await pastRuns;
     log2(note);
     comment = renderComment(result, {

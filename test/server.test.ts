@@ -13,7 +13,7 @@ import {
 } from '../src/server'
 
 const quiet = () => {}
-const none = { total: null, db: null, queries: null, isolate: null }
+const none = { total: null, db: null, queries: null, dbLocation: null, isolate: null }
 
 describe('parseServerTiming', () => {
 	it('reads total, db time, the db count and the isolate marker, ignoring other metrics', () => {
@@ -21,6 +21,7 @@ describe('parseServerTiming', () => {
 			total: 123.4,
 			db: 45.6,
 			queries: 7,
+			dbLocation: 'D1',
 			isolate: 'cold',
 		})
 		expect(parseServerTiming('isolate;desc="Warm"').isolate).toBe('warm')
@@ -31,6 +32,13 @@ describe('parseServerTiming', () => {
 		expect(parseServerTiming('db;dur=3, db;dur=5.5, db;dur=1.5')).toEqual({ ...none, db: 10, queries: 3 })
 		// One entry without a count says nothing about how many queries ran.
 		expect(parseServerTiming('DB;DUR=12')).toEqual({ ...none, db: 12 })
+	})
+
+	it('reads where the database runs from the first db entry that names it, and only a short plain name', () => {
+		expect(parseServerTiming('db;dur=40;count=5;desc=DFW, isolate;desc=warm').dbLocation).toBe('DFW')
+		expect(parseServerTiming('db;dur=3, db;dur=5;desc="us-east-1", db;dur=1;desc=SJC').dbLocation).toBe('us-east-1')
+		expect(parseServerTiming('db;dur=3;desc="<img src=x>"').dbLocation).toBeNull()
+		expect(parseServerTiming('cache;desc=DFW, db;dur=3;desc=""').dbLocation).toBeNull()
 	})
 
 	it('returns nulls for a missing, empty or malformed header', () => {
@@ -237,5 +245,20 @@ describe('summariseServer', () => {
 		const stat = summariseServer({ base, head: side(around(120, 3)), failures: noFailures }, 0.05)
 		expect(stat?.server?.db).toBeNull()
 		expect(stat?.summary.verdict).toBe('no-change')
+	})
+
+	it('does not judge server time when the two databases run in different places, and judges it when they share one', () => {
+		const at = (values: number[], db: number, dbLocation: string | null): ServerLoad[] => values.map(v => ({ ...sample(v, null, db), queries: 5, dbLocation }))
+		// The same 5 queries, 300 ms slower only because the PR's database is further away.
+		const apart = summariseServer({ base: at(around(220), 55, 'DFW'), head: at(around(520, 3), 326, 'SJC'), failures: noFailures }, 0.05)
+		expect(apart?.summary).toMatchObject({ verdict: 'no-change', baseMedian: 220, headMedian: 520 })
+		expect(apart?.server?.dbLocation).toEqual({ base: 'DFW', head: 'SJC' })
+		const together = summariseServer({ base: at(around(220), 55, 'DFW'), head: at(around(520, 3), 326, 'DFW'), failures: noFailures }, 0.05)
+		expect(together?.summary.verdict).toBe('regressed')
+		// One side that does not say yet (main deployed before it did) is judged as before.
+		const oneSided = summariseServer({ base: at(around(220), 55, null), head: at(around(520, 3), 326, 'SJC'), failures: noFailures }, 0.05)
+		expect(oneSided?.summary.verdict).toBe('regressed')
+		expect(oneSided?.server?.dbLocation).toEqual({ base: null, head: 'SJC' })
+		expect(summariseServer({ base: side(around(120)), head: side(around(120, 3)), failures: noFailures }, 0.05)?.server?.dbLocation).toBeNull()
 	})
 })

@@ -21,6 +21,8 @@ export interface ServerTiming {
 	db: number | null
 	// Server-Timing `db;count=`, or the number of db entries when there are several and none has a count.
 	queries: number | null
+	// Server-Timing `db;desc=`: where the database runs (a region or data centre), from the first db entry that names one.
+	dbLocation: string | null
 	// Server-Timing `isolate;desc=cold` or `warm`: whether this request was the first one its server instance handled.
 	isolate: 'cold' | 'warm' | null
 }
@@ -75,7 +77,7 @@ function nonNegative(raw: string | undefined): number | null {
 
 // Reads the metrics this action uses from a Server-Timing header (several headers arrive joined by commas).
 export function parseServerTiming(header: string | null): ServerTiming {
-	const out: ServerTiming = { total: null, db: null, queries: null, isolate: null }
+	const out: ServerTiming = { total: null, db: null, queries: null, dbLocation: null, isolate: null }
 	if (!header) return out
 	let dbEntries = 0
 	let dbDur: number | null = null
@@ -97,6 +99,9 @@ export function parseServerTiming(header: string | null): ServerTiming {
 			if (dur !== null) dbDur = (dbDur ?? 0) + dur
 			const count = nonNegative(params.get('count'))
 			if (count !== null) dbCount = (dbCount ?? 0) + count
+			// It goes into the comment, so only a short plain name.
+			const where = params.get('desc')?.trim() ?? ''
+			if (out.dbLocation === null && /^[\w .:-]{1,40}$/.test(where)) out.dbLocation = where
 		}
 	}
 	out.db = dbDur
@@ -169,6 +174,7 @@ function logLine(s: ServerSample): string {
 	if (s.total !== null) parts.push(`total ${Math.round(s.total)} ms`)
 	if (s.db !== null) parts.push(`db ${Math.round(s.db)} ms`)
 	if (s.queries !== null) parts.push(`${s.queries} queries`)
+	if (s.dbLocation !== null) parts.push(`db in ${s.dbLocation}`)
 	return parts.join(', ')
 }
 

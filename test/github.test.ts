@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextFromEvent, findPullRequest, GitHubApi, upsertComment } from '../src/github'
+import { baseAhead, contextFromEvent, findPullRequest, GitHubApi, upsertComment } from '../src/github'
 import { commentMarker, notMeasuredComment } from '../src/main'
 
 const env = {
@@ -13,12 +13,13 @@ const env = {
 
 describe('contextFromEvent', () => {
 	it('takes the PR, head and base from a pull_request event', () => {
-		const event = { pull_request: { number: 12, head: { sha: 'bbbbbbb', ref: 'feat/x' }, base: { sha: 'ccccccc' } } }
+		const event = { pull_request: { number: 12, head: { sha: 'bbbbbbb', ref: 'feat/x' }, base: { sha: 'ccccccc', ref: 'main' } } }
 		expect(contextFromEvent({ ...env, GITHUB_EVENT_NAME: 'pull_request' }, event)).toMatchObject({
 			repo: 'acme/shop',
 			prNumber: 12,
 			headSha: 'bbbbbbb',
 			baseSha: 'ccccccc',
+			baseRef: 'main',
 			branch: 'feat/x',
 			ciRunUrl: 'https://github.com/acme/shop/actions/runs/99',
 		})
@@ -133,6 +134,25 @@ describe('findPullRequest', () => {
 			],
 		}))
 		expect(await findPullRequest(api, 'acme/shop', 'abc1234', () => {})).toBe(3)
+	})
+})
+
+describe('baseAhead', () => {
+	it('counts the commits main gained after the PR base, with the newest titles first', async () => {
+		const commit = (message: string) => ({ commit: { message } })
+		const { api, calls } = fakeApi(() => ({
+			status: 200,
+			data: { ahead_by: 4, commits: [commit('One'), commit('Two\n\nbody'), commit('Three'), commit('Four')] },
+		}))
+		expect(await baseAhead(api, 'acme/shop', 'ccccccc', 'release/2', () => {})).toEqual({ ref: 'release/2', commits: 4, titles: ['Four', 'Three', 'Two'] })
+		expect(calls[0].url).toBe('https://api.github.com/repos/acme/shop/compare/ccccccc...release%2F2')
+	})
+
+	it('returns null and says why when the comparison fails', async () => {
+		const lines: string[] = []
+		const { api } = fakeApi(() => ({ status: 404, data: { message: 'Not Found' } }))
+		expect(await baseAhead(api, 'acme/shop', 'ccccccc', 'main', line => lines.push(line))).toBeNull()
+		expect(lines).toEqual(["Could not compare this PR's base with main (HTTP 404)."])
 	})
 })
 

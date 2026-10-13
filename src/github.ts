@@ -16,6 +16,8 @@ export interface RunContext {
 	prNumber: number | null
 	headSha: string
 	baseSha: string | null
+	// The branch the PR merges into, to see whether it moved on after the PR's base.
+	baseRef: string | null
 	branch: string | null
 	ciRunUrl: string | null
 	apiUrl: string
@@ -41,7 +43,7 @@ export function contextFromEvent(env: Env, event: unknown): RunContext {
 	const pr = at(event, 'pull_request')
 	const workflowRun = at(event, 'workflow_run')
 	const fallbackBranch = str(env.GITHUB_HEAD_REF) ?? str(env.GITHUB_REF_NAME)
-	const base = { repo, eventName, ciRunUrl, apiUrl: env.GITHUB_API_URL ?? 'https://api.github.com' }
+	const base = { repo, eventName, ciRunUrl, apiUrl: env.GITHUB_API_URL ?? 'https://api.github.com', baseRef: null }
 
 	if (isRecord(pr)) {
 		return {
@@ -49,6 +51,7 @@ export function contextFromEvent(env: Env, event: unknown): RunContext {
 			prNumber: posInt(pr.number),
 			headSha: str(at(pr, 'head', 'sha')) ?? env.GITHUB_SHA ?? '',
 			baseSha: str(at(pr, 'base', 'sha')),
+			baseRef: str(at(pr, 'base', 'ref')),
 			branch: str(at(pr, 'head', 'ref')) ?? fallbackBranch,
 		}
 	}
@@ -142,6 +145,39 @@ export async function findPullRequest(api: GitHubApi, repo: string, sha: string,
 		return posInt(at(match, 'number'))
 	} catch (err) {
 		log(`Could not look up the pull request: ${err instanceof Error ? err.message : String(err)}`)
+		return null
+	}
+}
+
+export interface BaseAhead {
+	ref: string
+	commits: number
+	// First lines of the newest few, newest first.
+	titles: string[]
+}
+
+const AHEAD_TITLES = 3
+
+// Commits on the base branch after the PR's base. The PR's build lacks them; main's preview may already run them.
+export async function baseAhead(api: GitHubApi, repo: string, baseSha: string, baseRef: string, log: Log): Promise<BaseAhead | null> {
+	try {
+		const { status, data } = await api.request('GET', `/repos/${repo}/compare/${baseSha}...${encodeURIComponent(baseRef)}`)
+		const commits = at(data, 'commits')
+		const aheadBy = at(data, 'ahead_by')
+		if (status !== 200 || typeof aheadBy !== 'number' || !Array.isArray(commits)) {
+			log(`Could not compare this PR's base with ${baseRef} (HTTP ${status}).`)
+			return null
+		}
+		const titles = commits
+			.slice(-AHEAD_TITLES)
+			.reverse()
+			.flatMap(c => {
+				const title = str(at(c, 'commit', 'message'))?.split('\n')[0].trim()
+				return title ? [title] : []
+			})
+		return { ref: baseRef, commits: aheadBy, titles }
+	} catch (err) {
+		log(`Could not compare this PR's base with ${baseRef}: ${err instanceof Error ? err.message : String(err)}`)
 		return null
 	}
 }

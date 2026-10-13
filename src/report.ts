@@ -272,12 +272,14 @@ function medianPair(base: readonly ServerSample[], head: readonly ServerSample[]
 }
 
 export interface EdgeChoice {
+	// The edge each side reached most.
 	base: string | null
 	head: string | null
-	compared: string | null
+	// Edges compared: main reached each at least 3 times and the PR at least once. Empty: not judged.
+	compared: string[]
 }
 
-// The edge both sides reached most often, by the smaller side's count; null when neither side names one.
+// Which edges the two sides can be compared through; null when either side names none.
 function edgeFor(base: readonly ServerSample[], head: readonly ServerSample[]): EdgeChoice | null {
 	const count = (side: readonly ServerSample[]): Map<string, number> => {
 		const m = new Map<string, number>()
@@ -287,13 +289,24 @@ function edgeFor(base: readonly ServerSample[], head: readonly ServerSample[]): 
 	const [b, h] = [count(base), count(head)]
 	if (b.size === 0 || h.size === 0) return null
 	const top = (m: Map<string, number>): string | null => [...m].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null
-	let compared: string | null = null
-	let best = 0
-	for (const [edge, n] of b) {
-		const both = Math.min(n, h.get(edge) ?? 0)
-		if (both >= MIN_SAMPLES && both > best) [compared, best] = [edge, both]
-	}
+	const compared = [...b].filter(([edge, n]) => n >= MIN_SAMPLES && h.has(edge)).map(([edge]) => edge)
 	return { base: top(b), head: top(h), compared }
+}
+
+// Each request less main's median through its edge, plus main's overall median: a far edge's extra distance cancels out
+// and what is left is the PR's change, on main's scale. Only requests through compared edges.
+function throughEdges(
+	edge: EdgeChoice | null,
+	base: readonly ServerSample[],
+	head: readonly ServerSample[],
+	value: (s: ServerSample) => number,
+): { base: ServerSample[]; head: ServerSample[]; adjust: (s: ServerSample) => number } {
+	if (!edge) return { base: [...base], head: [...head], adjust: value }
+	const kept = (side: readonly ServerSample[]): ServerSample[] => side.filter(s => s.edge && edge.compared.includes(s.edge))
+	const [b, h] = [kept(base), kept(head)]
+	const overall = median(b.map(value)) ?? 0
+	const at = new Map(edge.compared.map(e => [e, median(b.filter(s => s.edge === e).map(value)) ?? overall]))
+	return { base: b, head: h, adjust: s => value(s) - (at.get(s.edge ?? '') ?? overall) + overall }
 }
 
 // The database location a side's requests named, when they all name the same one.
@@ -306,8 +319,8 @@ function dbLocation(samples: readonly ServerSample[]): string | null {
 export const databasesApart = (d: Pick<ServerDetail, 'dbLocation'> | undefined): boolean =>
 	Boolean(d?.dbLocation?.base && d.dbLocation.head && d.dbLocation.base !== d.dbLocation.head)
 
-// No edge reached by at least 3 requests on each side: the two sides' times include different distances.
-export const edgesApart = (d: Pick<ServerDetail, 'edge'> | undefined): boolean => Boolean(d?.edge && !d.edge.compared)
+// No edge both sides reached (main at least 3 times): the two sides' times include different distances.
+export const edgesApart = (d: Pick<ServerDetail, 'edge'> | undefined): boolean => Boolean(d?.edge && d.edge.compared.length === 0)
 
 const goodLoads = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
 const sendsTiming = (s: ServerSample): boolean => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null
@@ -358,18 +371,20 @@ export function summariseServer(
 		}
 	}
 	const all = { base: split('base'), head: split('head') }
-	// Compared through one edge: a request that reached another one (reconnecting ran out of tries) is left out.
-	const edge = edgeFor(all.base.warm, all.head.warm)
-	const through = (warm: ServerSample[]): ServerSample[] => (edge?.compared ? warm.filter(s => s.edge === edge.compared) : warm)
-	const b = { ...all.base, warm: through(all.base.warm) }
-	const h = { ...all.head, warm: through(all.head.warm) }
-	if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null
 	// One test never mixes Server-Timing totals with first bytes.
 	// A static side has no handler time, so both sides are compared by first byte.
-	const source = !anyStatic && [...b.warm, ...h.warm].every(s => s.total !== null) ? 'server-timing' : 'ttfb'
+	const source = !anyStatic && [...all.base.warm, ...all.head.warm].every(s => s.total !== null) ? 'server-timing' : 'ttfb'
 	const value = (s: ServerSample): number => (source === 'server-timing' && s.total !== null ? s.total : s.ttfb)
-	const bKept = b.warm.map(value)
-	const hKept = h.warm.map(value)
+	// Compared edge by edge: a request through an edge main did not reach (reconnecting ran out of tries) is left out.
+	const edge = edgeFor(all.base.warm, all.head.warm)
+	const through = throughEdges(edge, all.base.warm, all.head.warm, value)
+	const apart = edge !== null && edge.compared.length === 0
+	const b = { ...all.base, warm: apart ? all.base.warm : through.base }
+	const h = { ...all.head, warm: apart ? all.head.warm : through.head }
+	if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null
+	const tested = apart ? value : through.adjust
+	const bKept = b.warm.map(tested)
+	const hKept = h.warm.map(tested)
 	const summary = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false)
 	// A percent of a base under the floor (a static server answering in 1 ms) means nothing.
 	if (summary.baseMedian < floor.absFloor) summary.deltaPct = null
@@ -378,13 +393,14 @@ export function summariseServer(
 	const perConnection = (side: 'base' | 'head', warm: readonly ServerSample[]): number[] => {
 		const kept = new Set(warm)
 		return Array.from({ length: connections }, (_, c) =>
-			median(samples[side].flatMap((s, i) => (s !== null && i % connections === c && kept.has(s) ? [value(s)] : []))),
+			median(samples[side].flatMap((s, i) => (s !== null && i % connections === c && kept.has(s) ? [tested(s)] : []))),
 		).filter((m): m is number => m !== null)
 	}
 	const bConn = perConnection('base', b.warm)
 	const hConn = perConnection('head', h.warm)
+	// Fewer than 3 connections a side is too few machines to judge.
 	const byConnection = bConn.length >= MIN_SAMPLES && hConn.length >= MIN_SAMPLES ? compareSamples(bConn, hConn, { alpha, ...floor }) : null
-	if (!anyStatic && byConnection && byConnection.verdict !== summary.verdict) summary.verdict = 'no-change'
+	if (!anyStatic && byConnection?.verdict !== summary.verdict) summary.verdict = 'no-change'
 	if (anyStatic) {
 		// Static now is the improvement, whatever the test says, unless the static first byte is not lower. Static before is never a verdict.
 		summary.verdict = statics.head && summary.verdict !== 'regressed' && summary.headMedian <= summary.baseMedian ? 'improved' : 'no-change'

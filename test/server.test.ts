@@ -240,12 +240,14 @@ describe('summariseServer', () => {
 		expect(result?.server?.source).toBe('ttfb')
 	})
 
-	it('flags 100 ms more server time, and tests Server-Timing total when every request carries it', () => {
-		const result = summariseServer({ base: side(around(120), true), head: side(around(220, 3), true), failures: noFailures }, 0.05)
+	it('flags 120 ms more server time, and tests Server-Timing total when every request carries it', () => {
+		const result = summariseServer({ base: side(around(120), true), head: side(around(240, 3), true), failures: noFailures }, 0.05)
 		expect(result?.server?.source).toBe('server-timing')
-		expect(result?.summary).toMatchObject({ verdict: 'regressed', baseMedian: 90, headMedian: 190 })
-		// The floor is 75 ms or 10% of main's median, whichever is larger.
-		expect(result?.summary.floor).toBe(75)
+		expect(result?.summary).toMatchObject({ verdict: 'regressed', baseMedian: 90, headMedian: 210 })
+		// The floor is 100 ms or 20% of main's median, whichever is larger.
+		expect(result?.summary.floor).toBe(100)
+		const smaller = summariseServer({ base: side(around(120), true), head: side(around(200, 3), true), failures: noFailures }, 0.05)
+		expect(smaller?.summary.verdict).toBe('no-change')
 	})
 
 	it('falls back to the first byte when any request lacks a total', () => {
@@ -348,11 +350,24 @@ describe('summariseServer', () => {
 			{ base: via(around(160).map((v, i) => (i % 15 === 0 ? v + 600 : v)), ['LHR', ...Array<string>(14).fill('IAD')]), head: via(around(160, 3), ['IAD']), failures: noFailures },
 			0.05,
 		)
-		expect(stray?.server?.edge).toEqual({ base: 'IAD', head: 'IAD', compared: 'IAD' })
+		expect(stray?.server?.edge).toEqual({ base: 'IAD', head: 'IAD', compared: ['IAD'] })
 		expect(stray?.base).toHaveLength(28)
 		const apart = summariseServer({ base: via(around(160), ['IAD']), head: via(around(560, 3), ['LHR']), failures: noFailures }, 0.05)
 		expect(apart?.summary.verdict).toBe('no-change')
-		expect(apart?.server?.edge).toEqual({ base: 'IAD', head: 'LHR', compared: null })
+		expect(apart?.server?.edge).toEqual({ base: 'IAD', head: 'LHR', compared: [] })
+		// Connections split between a near and a far edge in different shares: each edge is measured against main's own time
+		// through it, so the mix cancels and only a change on every edge counts.
+		const split = (centre: number, offset: number, farConnections: number[]): ServerLoad[] =>
+			around(centre, offset).map((v, i) => {
+				const far = farConnections.includes(i % 5)
+				return { ...sample(v + (far ? 500 : 0)), edge: far ? 'LHR' : 'IAD' }
+			})
+		const mix = summariseServer({ base: split(160, 0, [0, 1]), head: split(160, 3, [0, 1, 2]), failures: noFailures }, 0.05)
+		expect(mix?.server?.edge).toEqual({ base: 'IAD', head: 'LHR', compared: ['LHR', 'IAD'] })
+		expect(mix?.summary.verdict).toBe('no-change')
+		const slower = summariseServer({ base: split(160, 0, [0, 1]), head: split(310, 3, [0, 1, 2]), failures: noFailures }, 0.05)
+		expect(slower?.summary.verdict).toBe('regressed')
+		expect(slower?.summary.shift).toBeGreaterThan(130)
 		// A side that names no edge (main behind another host) is compared as before.
 		const unnamed = summariseServer({ base: side(around(160)), head: via(around(560, 3), ['LHR']), failures: noFailures }, 0.05)
 		expect(unnamed?.summary.verdict).toBe('regressed')

@@ -61717,7 +61717,7 @@ var FLOORS = {
   LCP: { absFloor: 100, relFloor: 0.05 },
   FCP: { absFloor: 100, relFloor: 0.05 },
   TTFB: { absFloor: 100, relFloor: 0.25 },
-  Server: { absFloor: 75, relFloor: 0.1 },
+  Server: { absFloor: 100, relFloor: 0.2 },
   TBT: { absFloor: 50, relFloor: 0.2 },
   INP: { absFloor: 25, relFloor: 0.2 },
   CLS: { absFloor: 0.01, relFloor: 0 }
@@ -62481,20 +62481,23 @@ function edgeFor(base, head) {
   const [b, h] = [count(base), count(head)];
   if (b.size === 0 || h.size === 0) return null;
   const top = (m) => [...m].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
-  let compared = null;
-  let best = 0;
-  for (const [edge, n] of b) {
-    const both = Math.min(n, h.get(edge) ?? 0);
-    if (both >= MIN_SAMPLES && both > best) [compared, best] = [edge, both];
-  }
+  const compared = [...b].filter(([edge, n]) => n >= MIN_SAMPLES && h.has(edge)).map(([edge]) => edge);
   return { base: top(b), head: top(h), compared };
+}
+function throughEdges(edge, base, head, value) {
+  if (!edge) return { base: [...base], head: [...head], adjust: value };
+  const kept = (side) => side.filter((s) => s.edge && edge.compared.includes(s.edge));
+  const [b, h] = [kept(base), kept(head)];
+  const overall = median(b.map(value)) ?? 0;
+  const at2 = new Map(edge.compared.map((e) => [e, median(b.filter((s) => s.edge === e).map(value)) ?? overall]));
+  return { base: b, head: h, adjust: (s) => value(s) - (at2.get(s.edge ?? "") ?? overall) + overall };
 }
 function dbLocation(samples) {
   const named = new Set(samples.flatMap((s) => s.dbLocation ? [s.dbLocation] : []));
   return named.size === 1 ? [...named][0] : null;
 }
 var databasesApart = (d) => Boolean(d?.dbLocation?.base && d.dbLocation.head && d.dbLocation.base !== d.dbLocation.head);
-var edgesApart = (d) => Boolean(d?.edge && !d.edge.compared);
+var edgesApart = (d) => Boolean(d?.edge && d.edge.compared.length === 0);
 var goodLoads = (side) => side.filter((s) => s !== null);
 var sendsTiming = (s) => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null;
 var sendsServerTiming = (samples) => [samples.base, samples.head, samples.first?.base ?? [], samples.first?.head ?? []].some((side) => goodLoads(side).some(sendsTiming));
@@ -62528,28 +62531,30 @@ function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base
     };
   };
   const all = { base: split("base"), head: split("head") };
-  const edge = edgeFor(all.base.warm, all.head.warm);
-  const through = (warm) => edge?.compared ? warm.filter((s) => s.edge === edge.compared) : warm;
-  const b = { ...all.base, warm: through(all.base.warm) };
-  const h = { ...all.head, warm: through(all.head.warm) };
-  if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null;
-  const source = !anyStatic && [...b.warm, ...h.warm].every((s) => s.total !== null) ? "server-timing" : "ttfb";
+  const source = !anyStatic && [...all.base.warm, ...all.head.warm].every((s) => s.total !== null) ? "server-timing" : "ttfb";
   const value = (s) => source === "server-timing" && s.total !== null ? s.total : s.ttfb;
-  const bKept = b.warm.map(value);
-  const hKept = h.warm.map(value);
+  const edge = edgeFor(all.base.warm, all.head.warm);
+  const through = throughEdges(edge, all.base.warm, all.head.warm, value);
+  const apart = edge !== null && edge.compared.length === 0;
+  const b = { ...all.base, warm: apart ? all.base.warm : through.base };
+  const h = { ...all.head, warm: apart ? all.head.warm : through.head };
+  if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null;
+  const tested2 = apart ? value : through.adjust;
+  const bKept = b.warm.map(tested2);
+  const hKept = h.warm.map(tested2);
   const summary2 = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false);
   if (summary2.baseMedian < floor.absFloor) summary2.deltaPct = null;
   const perConnection = (side, warm) => {
     const kept = new Set(warm);
     return Array.from(
       { length: connections },
-      (_2, c) => median(samples[side].flatMap((s, i) => s !== null && i % connections === c && kept.has(s) ? [value(s)] : []))
+      (_2, c) => median(samples[side].flatMap((s, i) => s !== null && i % connections === c && kept.has(s) ? [tested2(s)] : []))
     ).filter((m) => m !== null);
   };
   const bConn = perConnection("base", b.warm);
   const hConn = perConnection("head", h.warm);
   const byConnection = bConn.length >= MIN_SAMPLES && hConn.length >= MIN_SAMPLES ? compareSamples(bConn, hConn, { alpha, ...floor }) : null;
-  if (!anyStatic && byConnection && byConnection.verdict !== summary2.verdict) summary2.verdict = "no-change";
+  if (!anyStatic && byConnection?.verdict !== summary2.verdict) summary2.verdict = "no-change";
   if (anyStatic) {
     summary2.verdict = statics.head && summary2.verdict !== "regressed" && summary2.headMedian <= summary2.baseMedian ? "improved" : "no-change";
   }

@@ -60,6 +60,8 @@ The comment is built to be read in a notification email on a phone: the answer f
 - Server time is judged like the rest, in its own Server row: a slow query or an extra database round trip in a PR is a
   regression. When it regresses and your server sends a `Server-Timing` header, its database time and query count show
   under the row, see [Server time](#server-time).
+- When something changed and main has commits past the PR's base, one line under the `diff` block says so: main's preview
+  may already run code the PR's build lacks, so a change can be main's. The newest titles are in the fold.
 - One footer line: "Report only", a link to [Method](#method), and the CI run.
 
 The [demo repository](https://github.com/usero-feedback/pr-checks-demo/pulls?q=is%3Apr) has a PR with a deliberate slow hero
@@ -119,6 +121,16 @@ round trip from the runner. Rotating matters: a connection stays on one server m
 per side two deployments of the same Usero code read 34 to 58 ms apart, most likely one machine against another.
 The requests use the mobile browser's user agent and your `headers`.
 
+- **One edge for both sides.** From a GitHub runner, connections to the same site land on CDN edges far apart: one job saw
+  IAD and EWR, another LHR, AMS and BOS. A server that queries a database pays that distance on every round trip, so
+  main against itself read 55 ms apart when its connections split between IAD and EWR. When the site names its edge
+  (Cloudflare `cf-ray`, CloudFront `x-amz-cf-pop`, Vercel `x-vercel-id`), each warm-up connection is reopened, up to 4
+  times, until it reaches the edge most new connections reached. Requests that still went elsewhere are left out, and
+  sides that share no edge get `not judged` with both edges named.
+- **A verdict must hold per connection.** The Server row's test runs on every warm request and again on each kept-alive
+  connection's median, and only counts when both agree. Requests on one connection share a machine, so one slow machine
+  among five can move 6 of 30 requests at once; on the medians it is one value of five.
+
 - **Cold starts are reported apart, not judged.** On serverless hosts a request that lands on a cold instance pays its
   start-up (loading and evaluating the server bundle), and at low traffic that is most first visits. New connections are
   the likeliest way to reach one, which is why they come first. A request counts as cold when the server says so in
@@ -132,6 +144,11 @@ The requests use the mobile browser's user agent and your `headers`.
 - **The Server row is judged** like LCP or TBT (the test is under [Method](#method)), so a PR that adds a slow query, an
   extra database round trip or slow rendering on the server gets a regression on its own line. LCP and FCP are judged from
   the first byte, so the same slowdown is never counted twice.
+- **Databases in two places are not compared.** A preview per PR usually gets its own database, and a region hint is not a
+  place: on Cloudflare D1, `wnam` put six new databases in DFW, SJC, SEA and LAX. Most of a query's time is the trip to the
+  database, so the same code read 150 to 500 ms slower when the PR's database ran in SJC and main's in DFW. Send
+  `db;desc=<where>` and the row says `Database in DFW on main and SJC on this PR (db 55 ms to 326 ms), so server time is not
+  judged` instead of a regression. Better still, create the PR's database where main's runs.
 - **Cold requests among the measured ones** are left out of the Server row's test. Without the marker, at most 10% of a
   side's measured requests can be left out this way; more than that is how the server behaves, so they stay in.
 - **Static pages.** When the site sends `Server-Timing` on some pages, a side that sends none for a page is a prerendered
@@ -151,7 +168,7 @@ If your server sends a [`Server-Timing`](https://developer.mozilla.org/en-US/doc
 on HTML responses, the action reads four things from it:
 
 ```
-Server-Timing: total;dur=182.4, db;dur=41.7;count=6, isolate;desc=warm
+Server-Timing: total;dur=182.4, db;dur=41.7;count=6;desc=DFW, isolate;desc=warm
 ```
 
 | Metric             | Meaning                                                                                                     |
@@ -159,6 +176,7 @@ Server-Timing: total;dur=182.4, db;dur=41.7;count=6, isolate;desc=warm
 | `total;dur=<ms>`   | Time spent in your handler, up to the response headers. When every request on both sides has it, the Server row tests `total` instead of the first byte, which leaves the network out. |
 | `db;dur=<ms>`      | Database time. Shown under the Server row as main's and the PR's medians.                                   |
 | `db;count=<n>`     | Number of queries, shown next to it. Several `db` entries are summed, and without `count` each entry counts as one query. |
+| `db;desc=<where>`  | Where the database runs: a data centre, region or replica name (letters, digits, spaces and `.:-_`, up to 40). When main and the PR both send one and they differ, the Server row shows both times and is not judged, see below. |
 | `isolate;desc=cold` or `warm` | `cold` on the first request a server instance (isolate, lambda, process) handles, `warm` after. Decides which requests count as cold starts. A module-level counter is enough. |
 
 Other metrics in the header are ignored, and a page without the header (a prerendered or static page) is measured from its
@@ -392,7 +410,7 @@ up to 80 samples, ties included) and a Hodges-Lehmann shift with its confidence 
 | TBT      | 50 ms or 20%                          | Long-task time is the noisiest lab metric; only big shifts are real. |
 | INP      | 25 ms or 20%                          | One scripted click per load; small moves are frame timing noise.     |
 | CLS      | 0.01                                  | Lab CLS is nearly deterministic, so any visible shift counts.        |
-| Server   | 75 ms or 10% of main                  | Two deployments of the same code differed by up to 58 ms warm.       |
+| Server   | 100 ms or 20% of main                 | Two deployments of the same code differed by up to 95 ms warm on a page that queries its database. |
 
 **Paint is measured from the first byte.** LCP and FCP are tested as each load's value minus its TTFB, or minus the moment
 the page's first script could run when that is later: a server that answers in a millisecond beats the browser's own
@@ -433,7 +451,8 @@ runner, 15 runs per page, each the action's warm sampling (5 kept-alive connecti
 30 requests per side rotating over them), against Usero's main preview as main and, as the PR, either the same preview or a
 second deployment of the same code with its own Worker and database. Every side goes through a local proxy that keeps one
 upstream connection per incoming one, and the injected rows hold the PR's responses for 100 or 300 ms. Each cell is runs
-with the verdict, then the rate over 1000 runs resampled from all rounds, at the 75 ms floor:
+with the verdict, then the rate over 1000 runs resampled from all rounds, at the floor of the time (75 ms; it is now 100 ms
+or 20%, see the database-backed page below):
 
 | `/` then `/docs`               | main against main                | main against a second deployment |
 | ------------------------------ | -------------------------------- | -------------------------------- |
@@ -444,12 +463,34 @@ with the verdict, then the rate over 1000 runs resampled from all rounds, at the
 The second deployment answered 25 ms (`/`) and 16 ms (`/docs`) faster than main's with the same code, so its +100 ms read
 as about +75 ms and +81 ms, right at the floor: that is the column a real PR sits in, and +100 ms there is caught about
 three times in four. An earlier version used one connection per side and saw two deployments 34 to 58 ms apart on `/`
-(Usero PR #297; with the then 50 ms floor the first of those read as 58 ms faster), which is why the floor is 75 ms and the
-requests rotate. Warm medians per run stayed within 96 to 167 ms on `/` and 62 to 100 ms on `/docs`. The preview first-byte
+(Usero PR #297; with the then 50 ms floor the first of those read as 58 ms faster), which is why the floor became 75 ms and
+the requests rotate. Warm medians per run stayed within 96 to 167 ms on `/` and 62 to 100 ms on `/docs`. The preview first-byte
 swings that made page-load TTFB useless (0.1 s against 1.3 to 1.9 s) did not show up on warm connections; on new
 connections they did, as cold starts (1.3 to 2.9 s), which is what the cold start line reports. On the demo, a server 300 ms
 slower per page was flagged (PR #4). Neither Usero page queries its database for an anonymous visitor, so these runs cover
 rendering and the network, not query time.
+
+**A page that queries its database** was measured on 2026-10-13: Usero's seeded public board (5 queries to Cloudflare
+D1), main's preview against PR previews with their own Worker and database, every database in the same data centre (DFW)
+unless the row says otherwise. Action runs are the whole action on GitHub runners; power runs are `npm run power` as above,
+reanalysed with this version.
+
+| `/b/fieldnote`                                             | Result                                        |
+| ---------------------------------------------------------- | --------------------------------------------- |
+| Same code (A/A), action runs: a false verdict on any metric | 0 of 12                                       |
+| Same code, power runs: a false Server verdict              | 0 of 15 near DFW, 0 of 15 through 6 far edges |
+| +100 ms server time caught, power runs                     | 8 of 15 near DFW, 0 of 15 through far edges   |
+| +300 ms server time caught, power runs                     | 15 of 15, 15 of 15                            |
+| 10 extra sequential queries (Usero PR #319), action runs   | 3 of 3 (+381 ms to +1.26 s)                   |
+| Same code, PR database in LAX, main's in DFW (PR #322)     | 2 of 2 `not judged`; v0.6.2 called it a +195 ms regression |
+
+Before this version the board read as a Server regression on 7 of 9 Usero PRs that never touched it. Three things moved its
+server time with the same code: the PR's database landing in another data centre (150 to 500 ms, now named by
+`db;desc` and not judged), runner connections spread over edges as far apart as Boston and London (now pinned and compared
+edge by edge), and one deployment against another under its own load (up to 95 ms both ways, hence the floor). Through far
+edges every query pays a transatlantic round trip and main's own median ranged 578 ms to 1.21 s, so the 20% floor is 116
+to 243 ms there and +100 ms cannot count; a real query regression grows with that distance too (the 10 extra queries read
++1.26 s through London).
 
 ## Limits
 

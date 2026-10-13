@@ -1,8 +1,8 @@
 // Server time: plain GETs (no browser, no throttling) to each path on main and the PR, interleaved. New connections first
 // to catch cold starts, then warm kept-alive connections for the judged Server row.
-import { Agent as HttpAgent, request as httpRequest } from 'node:http'
+import { Agent as HttpAgent, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
-import { DEVICES, type DeviceName, SERVER_TIMEOUT_MS } from './config'
+import { DEVICES, type DeviceName, SERVER_PIN_ATTEMPTS, SERVER_TIMEOUT_MS } from './config'
 import { firstLine, joinUrl, type Log, roundOrder } from './run'
 
 const DOCUMENT_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
@@ -30,6 +30,29 @@ export interface ServerTiming {
 export interface ServerSample extends ServerTiming {
 	// Request sent to first response byte: connection setup excluded on a kept-alive connection, included on a new one.
 	ttfb: number
+	// The CDN edge that answered (Cloudflare cf-ray, CloudFront x-amz-cf-pop, Vercel x-vercel-id); null when none says.
+	edge?: string | null
+}
+
+const headerValue = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
+
+// A connection stays on one edge, and a far edge adds its distance to every database round trip the server makes.
+export function edgeOf(headers: IncomingHttpHeaders): string | null {
+	const ray = /-([A-Z]{3})$/.exec(headerValue(headers['cf-ray']).trim())
+	if (ray) return ray[1]
+	const pop = /^([A-Z]{3})\d/.exec(headerValue(headers['x-amz-cf-pop']).trim())
+	if (pop) return pop[1]
+	const vercel = /^([a-z]{3}\d)::/.exec(headerValue(headers['x-vercel-id']).trim())
+	return vercel ? vercel[1] : null
+}
+
+// The edge most of these requests reached, or null when none says.
+export function commonEdge(samples: readonly ServerLoad[]): string | null {
+	const counts = new Map<string, number>()
+	for (const s of samples) if (s?.edge) counts.set(s.edge, (counts.get(s.edge) ?? 0) + 1)
+	let best: string | null = null
+	for (const [edge, n] of counts) if (best === null || n > (counts.get(best) ?? 0)) best = edge
+	return best
 }
 
 // A failed request is null, kept in its round so main and PR pair up by index.
@@ -152,7 +175,7 @@ export function timeGet(url: string, headers: Record<string, string>, connection
 					else {
 						const timing = res.headers['server-timing']
 						const header = Array.isArray(timing) ? timing.join(', ') : (timing ?? null)
-						resolve({ ttfb: Math.round(ttfb * 10) / 10, ...parseServerTiming(header) })
+						resolve({ ttfb: Math.round(ttfb * 10) / 10, edge: edgeOf(res.headers), ...parseServerTiming(header) })
 					}
 				})
 			})
@@ -175,15 +198,35 @@ function logLine(s: ServerSample): string {
 	if (s.db !== null) parts.push(`db ${Math.round(s.db)} ms`)
 	if (s.queries !== null) parts.push(`${s.queries} queries`)
 	if (s.dbLocation !== null) parts.push(`db in ${s.dbLocation}`)
+	if (s.edge) parts.push(`via ${s.edge}`)
 	return parts.join(', ')
 }
 
 // A request on one of a side's kept-alive connections, by index.
 export type WarmRequest = (url: string, side: 'base' | 'head', connection: number) => Promise<ServerSample>
 
+// A warm-up request on a kept-alive connection, reopened until it reaches the target edge (when the site names its edge).
+export async function pinnedWarmUp(
+	send: () => Promise<ServerSample>,
+	reconnect: (() => void) | undefined,
+	target: string | null,
+	attempts = SERVER_PIN_ATTEMPTS,
+	missed: (sample: ServerSample) => void = () => {},
+): Promise<ServerSample> {
+	let sample = await send()
+	for (let tries = 1; reconnect && target && sample.edge && sample.edge !== target && tries < attempts; tries++) {
+		missed(sample)
+		reconnect()
+		sample = await send()
+	}
+	return sample
+}
+
 // New-connection requests, then one warm-up request per kept-alive connection (both kept apart for cold starts, never
 // tested), then the measured rounds: one request per side each, alternating, rotating over the connections so a side's
-// samples spread over several server machines instead of the one a single connection lands on.
+// samples spread over several server machines instead of the one a single connection lands on. With reconnect, each
+// kept-alive connection is reopened until it reaches the edge most new connections reached, so both sides are measured
+// through the same place.
 export async function sampleServer({
 	path,
 	baseUrl,
@@ -193,6 +236,7 @@ export async function sampleServer({
 	connections,
 	request,
 	newConnection,
+	reconnect,
 	log,
 }: {
 	path: string
@@ -203,6 +247,7 @@ export async function sampleServer({
 	connections: number
 	request: WarmRequest
 	newConnection: ServerRequest
+	reconnect?: (side: 'base' | 'head', connection: number) => void
 	log: Log
 }): Promise<ServerSamples> {
 	const sides = [
@@ -226,7 +271,16 @@ export async function sampleServer({
 		if (line.length > 0) log(`  ${path} server ${label}: ${line.join('; ')}`)
 	}
 	await phase('new connections', newConnections, url => newConnection(url))
-	await phase('warm-up', connections, request)
+	const target = commonEdge([...first.base, ...first.head])
+	await phase('warm-up', connections, (url, side, i) =>
+		pinnedWarmUp(
+			() => request(url, side, i),
+			reconnect ? () => reconnect(side, i) : undefined,
+			target,
+			SERVER_PIN_ATTEMPTS,
+			sample => first[side].push(sample),
+		),
+	)
 	for (let round = 0; round < samples; round++) {
 		const line: string[] = []
 		for (const side of roundOrder(sides, round)) {

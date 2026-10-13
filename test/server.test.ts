@@ -4,8 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { coldLimit, summariseServer } from '../src/report'
 import {
 	closeConnection,
+	commonEdge,
+	edgeOf,
 	keptAliveConnection,
 	parseServerTiming,
+	pinnedWarmUp,
 	type ServerLoad,
 	type ServerSample,
 	sampleServer,
@@ -53,6 +56,43 @@ describe('parseServerTiming', () => {
 	})
 })
 
+describe('edgeOf and commonEdge', () => {
+	it('reads the edge from Cloudflare, CloudFront and Vercel headers', () => {
+		expect(edgeOf({ 'cf-ray': '8f1d2c3b4a5e6f70-DFW' })).toBe('DFW')
+		expect(edgeOf({ 'x-amz-cf-pop': 'IAD89-C1' })).toBe('IAD')
+		expect(edgeOf({ 'x-vercel-id': 'iad1::sfo1::abcd-123' })).toBe('iad1')
+		expect(edgeOf({ 'cf-ray': 'garbage' })).toBeNull()
+		expect(edgeOf({})).toBeNull()
+	})
+
+	it('picks the edge most requests reached', () => {
+		const at = (edge: string | null): ServerSample => ({ ...none, ttfb: 1, edge })
+		expect(commonEdge([at('IAD'), at('EWR'), at('IAD'), null, at(null)])).toBe('IAD')
+		expect(commonEdge([at(null), null])).toBeNull()
+	})
+})
+
+describe('pinnedWarmUp', () => {
+	it('reopens the connection until it reaches the target edge, within the tries', async () => {
+		const edges = ['LHR', 'EWR', 'IAD', 'IAD']
+		let reconnects = 0
+		const missed: string[] = []
+		const send = async (): Promise<ServerSample> => ({ ...none, ttfb: 1, edge: edges[reconnects] })
+		const got = await pinnedWarmUp(send, () => reconnects++, 'IAD', 4, s => missed.push(s.edge ?? '-'))
+		expect(got.edge).toBe('IAD')
+		expect(reconnects).toBe(2)
+		expect(missed).toEqual(['LHR', 'EWR'])
+		reconnects = 0
+		expect((await pinnedWarmUp(send, () => reconnects++, 'SJC', 3)).edge).toBe('IAD')
+		expect(reconnects).toBe(2)
+		// No target, no reconnect callback or no edge on the response: one request, kept.
+		reconnects = 0
+		await pinnedWarmUp(send, () => reconnects++, null)
+		await pinnedWarmUp(send, undefined, 'IAD')
+		expect(reconnects).toBe(0)
+	})
+})
+
 describe('sampleServer', () => {
 	it('sends new-connection and one warm-up request per connection first, then alternates main and PR over the connections', async () => {
 		const calls: string[] = []
@@ -78,6 +118,30 @@ describe('sampleServer', () => {
 		expect(out.base.map(s => s?.ttfb ?? null)).toEqual([9, 12, 13])
 		expect(out.head).toEqual([null, { ...none, ttfb: 11 }, { ...none, ttfb: 14 }])
 		expect(out.failures).toEqual({ base: [], head: ['HTTP 502'] })
+	})
+})
+
+describe('sampleServer edge pinning', () => {
+	it('reopens a warm-up connection that reached another edge than most new connections, then measures on it', async () => {
+		const opened = { base: [0, 0], head: [0, 0] }
+		// Each side's connection 1 first lands in LHR; reopened, it reaches IAD like the rest.
+		const edgeFor = (side: 'base' | 'head', i: number): string => (i === 1 && opened[side][1] === 0 ? 'LHR' : 'IAD')
+		const out = await sampleServer({
+			path: '/',
+			baseUrl: 'https://main.test',
+			headUrl: 'https://pr.test',
+			samples: 4,
+			newConnections: 3,
+			connections: 2,
+			request: async (_url, side, i) => ({ ...none, ttfb: 10, edge: edgeFor(side, i) }),
+			newConnection: async () => ({ ...none, ttfb: 10, edge: 'IAD' }),
+			reconnect: (side, i) => opened[side][i]++,
+			log: quiet,
+		})
+		expect(opened).toEqual({ base: [0, 1], head: [0, 1] })
+		expect([...out.base, ...out.head].map(s => s?.edge)).toEqual(Array(8).fill('IAD'))
+		// The stray warm-up is kept with the first requests, for cold starts only.
+		expect(out.first?.base.map(s => s?.edge)).toEqual(['IAD', 'IAD', 'IAD', 'IAD', 'LHR', 'IAD'])
 	})
 })
 
@@ -256,9 +320,42 @@ describe('summariseServer', () => {
 		const together = summariseServer({ base: at(around(220), 55, 'DFW'), head: at(around(520, 3), 326, 'DFW'), failures: noFailures }, 0.05)
 		expect(together?.summary.verdict).toBe('regressed')
 		// One side that does not say yet (main deployed before it did) is judged as before.
-		const oneSided = summariseServer({ base: at(around(220), 55, null), head: at(around(520, 3), 326, 'SJC'), failures: noFailures }, 0.05)
+		const oneSided = summariseServer(
+			{ base: at(around(220), 55, null), head: at(around(520, 3), 326, 'SJC'), failures: noFailures },
+			0.05,
+		)
 		expect(oneSided?.summary.verdict).toBe('regressed')
 		expect(oneSided?.server?.dbLocation).toEqual({ base: null, head: 'SJC' })
 		expect(summariseServer({ base: side(around(120)), head: side(around(120, 3)), failures: noFailures }, 0.05)?.server?.dbLocation).toBeNull()
+	})
+
+	it('needs the verdict on the per-connection medians too, so one far machine cannot fake a change', () => {
+		// Request i rides connection i % 5. main has 1 of 5 connections 480 ms further from its database, the PR 3 of 5.
+		const far = (values: number[], slow: number[]): ServerLoad[] => side(values.map((v, i) => v + (slow.includes(i % 5) ? 480 : 0)))
+		const mixed = summariseServer({ base: far(around(160), [0]), head: far(around(160, 3), [1, 2, 4]), failures: noFailures }, 0.05)
+		expect(mixed?.summary.verdict).toBe('no-change')
+		expect(mixed?.server?.byConnection).toMatchObject({ verdict: 'no-change', base: expect.any(Array), head: expect.any(Array) })
+		// The same 100 ms on every connection is a regression on both tests.
+		const slower = summariseServer({ base: far(around(160), [0]), head: far(around(260, 3), [0]), failures: noFailures }, 0.05)
+		expect(slower?.summary.verdict).toBe('regressed')
+		expect(slower?.server?.byConnection?.verdict).toBe('regressed')
+	})
+
+	it('compares requests through the edge both sides reached, and judges nothing when they share none', () => {
+		const via = (values: number[], edges: (string | null)[]): ServerLoad[] => values.map((v, i) => ({ ...sample(v), edge: edges[i % edges.length] }))
+		// Two of main's requests went through a far edge; the rest of both sides through IAD, with the same time.
+		const stray = summariseServer(
+			{ base: via(around(160).map((v, i) => (i % 15 === 0 ? v + 600 : v)), ['LHR', ...Array<string>(14).fill('IAD')]), head: via(around(160, 3), ['IAD']), failures: noFailures },
+			0.05,
+		)
+		expect(stray?.server?.edge).toEqual({ base: 'IAD', head: 'IAD', compared: 'IAD' })
+		expect(stray?.base).toHaveLength(28)
+		const apart = summariseServer({ base: via(around(160), ['IAD']), head: via(around(560, 3), ['LHR']), failures: noFailures }, 0.05)
+		expect(apart?.summary.verdict).toBe('no-change')
+		expect(apart?.server?.edge).toEqual({ base: 'IAD', head: 'LHR', compared: null })
+		// A side that names no edge (main behind another host) is compared as before.
+		const unnamed = summariseServer({ base: side(around(160)), head: via(around(560, 3), ['LHR']), failures: noFailures }, 0.05)
+		expect(unnamed?.summary.verdict).toBe('regressed')
+		expect(unnamed?.server?.edge).toBeNull()
 	})
 })

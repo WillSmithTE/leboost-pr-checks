@@ -43,6 +43,10 @@ async function measureServer(run: VitalsRun): Promise<Map<string, ServerSamples>
 				connections: SERVER_CONNECTIONS,
 				request: (url, side, i) => timeGet(url, headers, pools[side][i]),
 				newConnection: url => timeGet(url, headers, null),
+				reconnect: (side, i) => {
+					closeConnection(pools[side][i])
+					pools[side][i] = keptAliveConnection()
+				},
 				log: run.log,
 			})
 			out.set(page.path, samples)

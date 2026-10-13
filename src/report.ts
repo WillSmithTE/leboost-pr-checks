@@ -9,6 +9,7 @@ import {
 	LOAD_METRICS,
 	METRICS,
 	type MetricName,
+	SERVER_CONNECTIONS,
 } from './config'
 import type { Load, PageSamples, SideName } from './run'
 import { chartImage, type History } from './chart'
@@ -52,6 +53,11 @@ export interface ServerDetail {
 	queries: MedianPair | null
 	// Where each side's database runs, from Server-Timing db;desc; null when neither side says. Two places: not judged.
 	dbLocation: { base: string | null; head: string | null } | null
+	// The CDN edge each side mostly reached and the one compared (null when they share none: not judged). Null when the
+	// site names no edge.
+	edge?: EdgeChoice | null
+	// The same test on each kept-alive connection's median; a verdict needs both to agree. Null under 3 connections a side.
+	byConnection: { base: number[]; head: number[]; shift: number; pValue: number; verdict: Verdict } | null
 	coldStarts: ColdStarts
 	requests: { base: ServerLoad[]; head: ServerLoad[]; first: { base: ServerLoad[]; head: ServerLoad[] } }
 }
@@ -265,6 +271,31 @@ function medianPair(base: readonly ServerSample[], head: readonly ServerSample[]
 	return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) }
 }
 
+export interface EdgeChoice {
+	base: string | null
+	head: string | null
+	compared: string | null
+}
+
+// The edge both sides reached most often, by the smaller side's count; null when neither side names one.
+function edgeFor(base: readonly ServerSample[], head: readonly ServerSample[]): EdgeChoice | null {
+	const count = (side: readonly ServerSample[]): Map<string, number> => {
+		const m = new Map<string, number>()
+		for (const s of side) if (s.edge) m.set(s.edge, (m.get(s.edge) ?? 0) + 1)
+		return m
+	}
+	const [b, h] = [count(base), count(head)]
+	if (b.size === 0 || h.size === 0) return null
+	const top = (m: Map<string, number>): string | null => [...m].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null
+	let compared: string | null = null
+	let best = 0
+	for (const [edge, n] of b) {
+		const both = Math.min(n, h.get(edge) ?? 0)
+		if (both >= MIN_SAMPLES && both > best) [compared, best] = [edge, both]
+	}
+	return { base: top(b), head: top(h), compared }
+}
+
 // The database location a side's requests named, when they all name the same one.
 function dbLocation(samples: readonly ServerSample[]): string | null {
 	const named = new Set(samples.flatMap(s => (s.dbLocation ? [s.dbLocation] : [])))
@@ -274,6 +305,9 @@ function dbLocation(samples: readonly ServerSample[]): string | null {
 // Query time is mostly the trip to the database, so two databases in different places cannot be compared.
 export const databasesApart = (d: Pick<ServerDetail, 'dbLocation'> | undefined): boolean =>
 	Boolean(d?.dbLocation?.base && d.dbLocation.head && d.dbLocation.base !== d.dbLocation.head)
+
+// No edge reached by at least 3 requests on each side: the two sides' times include different distances.
+export const edgesApart = (d: Pick<ServerDetail, 'edge'> | undefined): boolean => Boolean(d?.edge && !d.edge.compared)
 
 const goodLoads = (side: readonly ServerLoad[]): ServerSample[] => side.filter((s): s is ServerSample => s !== null)
 const sendsTiming = (s: ServerSample): boolean => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null
@@ -296,6 +330,7 @@ export function summariseServer(
 	alpha: number,
 	floor: Floor = FLOORS.Server,
 	statics: StaticSides = { base: false, head: false },
+	connections = SERVER_CONNECTIONS,
 ): MetricResult | null {
 	if (statics.base && statics.head) return null
 	const anyStatic = statics.base || statics.head
@@ -322,8 +357,12 @@ export function summariseServer(
 			].map(s => s.ttfb),
 		}
 	}
-	const b = split('base')
-	const h = split('head')
+	const all = { base: split('base'), head: split('head') }
+	// Compared through one edge: a request that reached another one (reconnecting ran out of tries) is left out.
+	const edge = edgeFor(all.base.warm, all.head.warm)
+	const through = (warm: ServerSample[]): ServerSample[] => (edge?.compared ? warm.filter(s => s.edge === edge.compared) : warm)
+	const b = { ...all.base, warm: through(all.base.warm) }
+	const h = { ...all.head, warm: through(all.head.warm) }
 	if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null
 	// One test never mixes Server-Timing totals with first bytes.
 	// A static side has no handler time, so both sides are compared by first byte.
@@ -334,13 +373,25 @@ export function summariseServer(
 	const summary = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false)
 	// A percent of a base under the floor (a static server answering in 1 ms) means nothing.
 	if (summary.baseMedian < floor.absFloor) summary.deltaPct = null
+	// Requests on one connection share a server machine, and one machine can sit hundreds of ms further from the database
+	// than the rest, so a verdict must also hold on the per-connection medians.
+	const perConnection = (side: 'base' | 'head', warm: readonly ServerSample[]): number[] => {
+		const kept = new Set(warm)
+		return Array.from({ length: connections }, (_, c) =>
+			median(samples[side].flatMap((s, i) => (s !== null && i % connections === c && kept.has(s) ? [value(s)] : []))),
+		).filter((m): m is number => m !== null)
+	}
+	const bConn = perConnection('base', b.warm)
+	const hConn = perConnection('head', h.warm)
+	const byConnection = bConn.length >= MIN_SAMPLES && hConn.length >= MIN_SAMPLES ? compareSamples(bConn, hConn, { alpha, ...floor }) : null
+	if (!anyStatic && byConnection && byConnection.verdict !== summary.verdict) summary.verdict = 'no-change'
 	if (anyStatic) {
 		// Static now is the improvement, whatever the test says, unless the static first byte is not lower. Static before is never a verdict.
 		summary.verdict = statics.head && summary.verdict !== 'regressed' && summary.headMedian <= summary.baseMedian ? 'improved' : 'no-change'
 	}
 	const where = { base: dbLocation(b.warm), head: dbLocation(h.warm) }
 	const located = where.base !== null || where.head !== null ? where : null
-	if (databasesApart({ dbLocation: located })) summary.verdict = 'no-change'
+	if (databasesApart({ dbLocation: located }) || edgesApart({ edge })) summary.verdict = 'no-change'
 	return {
 		base: bKept,
 		head: hKept,
@@ -351,6 +402,10 @@ export function summariseServer(
 			db: medianPair(b.warm, h.warm, 'db'),
 			queries: medianPair(b.warm, h.warm, 'queries'),
 			dbLocation: located,
+			edge,
+			byConnection: byConnection
+				? { base: bConn.map(tidy), head: hConn.map(tidy), shift: tidy(byConnection.shift), pValue: tidy(byConnection.pValue), verdict: byConnection.verdict }
+				: null,
 			coldStarts: {
 				source: { base: marked('base') ? 'isolate' : 'outliers', head: marked('head') ? 'isolate' : 'outliers' },
 				base: b.cold,
@@ -621,6 +676,7 @@ function serverDetail(d: ServerDetail, verdict: Verdict): string | null {
 
 // Two databases in different places: both times stay in the row, and this says why it has no verdict.
 function databasesApartDetail(d: ServerDetail): string | null {
+	if (edgesApart(d) && d.edge) return `Server requests reached main through ${d.edge.base} and this PR through ${d.edge.head}, so server time is not judged`
 	if (!databasesApart(d) || !d.dbLocation) return null
 	const db = d.db ? ` (db ${formatValue('Server', d.db.baseMedian)} to ${formatValue('Server', d.db.headMedian)})` : ''
 	return `Database in ${d.dbLocation.base} on main and ${d.dbLocation.head} on this PR${db}, so server time is not judged`
@@ -694,7 +750,7 @@ function pageTable(page: PageResult, hasProd: boolean): string[] {
 				? formatChange(metric, t.baseMedian, t.headMedian, null)
 				: `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`
 		// A static side's first byte is not server time, so a page that stopped being static gets no verdict and no sign.
-		if ((st?.base && !st.head) || databasesApart(m.server)) change = 'not judged'
+		if ((st?.base && !st.head) || databasesApart(m.server) || edgesApart(m.server)) change = 'not judged'
 		const cell = (side: 'base' | 'head', v: number): string => `${formatValue(metric, v)}${st?.[side] ? `${NBSP}(static)` : ''}`
 		return `| ${[metric, cell('base', s.baseMedian), cell('head', s.headMedian), change].join(' | ')} |`
 	})

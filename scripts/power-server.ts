@@ -5,11 +5,20 @@ import { createServer, request as httpRequest, type IncomingMessage, type Outgoi
 import { request as httpsRequest } from 'node:https'
 import type { AddressInfo, Socket } from 'node:net'
 import { parseArgs } from 'node:util'
-import { DEFAULT_ALPHA, DEFAULT_SERVER_SAMPLES, SERVER_CONNECTIONS } from '../src/config'
+import { DEFAULT_ALPHA, DEFAULT_SERVER_SAMPLES, SERVER_CONNECTIONS, SERVER_NEW_CONNECTIONS } from '../src/config'
 import { isRecord } from '../src/github'
 import { summariseServer } from '../src/report'
 import { joinUrl, roundOrder } from '../src/run'
-import { type Connection, closeConnection, keptAliveConnection, type ServerLoad, serverRequestHeaders, timeGet } from '../src/server'
+import {
+	commonEdge,
+	type Connection,
+	closeConnection,
+	keptAliveConnection,
+	pinnedWarmUp,
+	type ServerLoad,
+	serverRequestHeaders,
+	timeGet,
+} from '../src/server'
 
 interface Condition {
 	name: string
@@ -96,12 +105,30 @@ async function collect(args: Args): Promise<void> {
 			for (let r = 0; r < Number(args.runs); r++) {
 				// Fresh connections per run, as each action run opens its own: one warm-up each, then rotation.
 				const pools = conditions.map(() => Array.from({ length: SERVER_CONNECTIONS }, keptAliveConnection))
+				const fail = (i: number) => (err: unknown) => {
+					console.log(`  ${conditions[i].name} ${path} failed: ${String(err).split('\n')[0]}`)
+					return null
+				}
 				const request = (i: number, k: number): Promise<ServerLoad> =>
-					timeGet(joinUrl(proxies[i].origin, path), headers, pools[i][k % SERVER_CONNECTIONS]).catch((err: unknown) => {
-						console.log(`  ${conditions[i].name} ${path} failed: ${String(err).split('\n')[0]}`)
-						return null
-					})
-				for (let w = 0; w < SERVER_CONNECTIONS; w++) for (const i of roundOrder(order, w)) await request(i, w)
+					timeGet(joinUrl(proxies[i].origin, path), headers, pools[i][k % SERVER_CONNECTIONS]).catch(fail(i))
+				// As the action: new connections find the usual edge, then each kept-alive connection is reopened until it reaches it.
+				const fresh: ServerLoad[] = []
+				for (let n = 0; n < SERVER_NEW_CONNECTIONS; n++) {
+					for (const i of roundOrder(order, n)) fresh.push(await timeGet(joinUrl(proxies[i].origin, path), headers, null).catch(fail(i)))
+				}
+				const target = commonEdge(fresh)
+				for (let w = 0; w < SERVER_CONNECTIONS; w++) {
+					for (const i of roundOrder(order, w)) {
+						await pinnedWarmUp(
+							() => timeGet(joinUrl(proxies[i].origin, path), headers, pools[i][w]),
+							() => {
+								closeConnection(pools[i][w])
+								pools[i][w] = keptAliveConnection()
+							},
+							target,
+						).catch(fail(i))
+					}
+				}
 				const run: Run = Object.fromEntries(conditions.map(c => [c.name, []]))
 				for (let round = 0; round < samples; round++) {
 					for (const i of roundOrder(order, round)) run[conditions[i].name].push(await request(i, round))
@@ -109,7 +136,8 @@ async function collect(args: Args): Promise<void> {
 				for (const connection of pools.flat()) closeConnection(connection)
 				data.runs[path].push(run)
 				const medians = conditions.map(c => `${c.name} ${Math.round(medianOf(run[c.name]))}`).join(', ')
-				console.log(`${path} run ${r + 1}: ${medians} ms`)
+				const edges = [...new Set(Object.values(run).flatMap(loads => loads.map(s => s?.edge ?? '-')))].join(' ')
+				console.log(`${path} run ${r + 1}: ${medians} ms, edges ${edges} (target ${target ?? 'none'})`)
 				await writeFile(args.out, `${JSON.stringify(data)}\n`)
 			}
 		}

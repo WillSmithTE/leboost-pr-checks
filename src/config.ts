@@ -71,6 +71,9 @@ export const SERVER_NEW_CONNECTIONS = 10
 // Kept-alive connections per side and path. Each opens with one warm-up request; the measured ones rotate over them, since
 // one connection stays on one server machine and two machines can differ by tens of ms.
 export const SERVER_CONNECTIONS = 5
+// Tries per kept-alive connection to reach the edge most new connections reached: from a GitHub runner, connections to one
+// site land on edges hundreds of km apart, and every database round trip pays that distance.
+export const SERVER_PIN_ATTEMPTS = 4
 export const SERVER_TIMEOUT_MS = 30_000
 // Without a Server-Timing isolate marker, a time over max(factor x the side's warm median, median + plusMs) is a cold
 // start. Up to maxShare of the measured requests are left out of the test; more is how the server behaves, so they stay in.

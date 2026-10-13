@@ -5324,23 +5324,23 @@ var require_formdata_parser = __commonJS({
             break;
           }
           case "content-type": {
-            let headerValue = collectASequenceOfBytes(
+            let headerValue2 = collectASequenceOfBytes(
               (char) => char !== 10 && char !== 13,
               input,
               position
             );
-            headerValue = removeChars(headerValue, false, true, (char) => char === 9 || char === 32);
-            contentType2 = isomorphicDecode(headerValue);
+            headerValue2 = removeChars(headerValue2, false, true, (char) => char === 9 || char === 32);
+            contentType2 = isomorphicDecode(headerValue2);
             break;
           }
           case "content-transfer-encoding": {
-            let headerValue = collectASequenceOfBytes(
+            let headerValue2 = collectASequenceOfBytes(
               (char) => char !== 10 && char !== 13,
               input,
               position
             );
-            headerValue = removeChars(headerValue, false, true, (char) => char === 9 || char === 32);
-            encoding = isomorphicDecode(headerValue);
+            headerValue2 = removeChars(headerValue2, false, true, (char) => char === 9 || char === 32);
+            encoding = isomorphicDecode(headerValue2);
             break;
           }
           default: {
@@ -10675,8 +10675,8 @@ var require_mock_utils = __commonJS({
     }
     function lowerCaseEntries(headers) {
       return Object.fromEntries(
-        Object.entries(headers).map(([headerName, headerValue]) => {
-          return [headerName.toLocaleLowerCase(), headerValue];
+        Object.entries(headers).map(([headerName, headerValue2]) => {
+          return [headerName.toLocaleLowerCase(), headerValue2];
         })
       );
     }
@@ -10716,8 +10716,8 @@ var require_mock_utils = __commonJS({
         return false;
       }
       for (const [matchHeaderName, matchHeaderValue] of Object.entries(mockDispatch2.headers)) {
-        const headerValue = getHeaderByName(headers, matchHeaderName);
-        if (!matchValue(matchHeaderValue, headerValue)) {
+        const headerValue2 = getHeaderByName(headers, matchHeaderName);
+        if (!matchValue(matchHeaderValue, headerValue2)) {
           return false;
         }
       }
@@ -50867,9 +50867,9 @@ var require_lib2 = __commonJS({
       _getExistingOrDefaultHeader(additionalHeaders, header, _default) {
         let clientHeader;
         if (this.requestOptions && this.requestOptions.headers) {
-          const headerValue = lowercaseKeys3(this.requestOptions.headers)[header];
-          if (headerValue) {
-            clientHeader = typeof headerValue === "number" ? headerValue.toString() : headerValue;
+          const headerValue2 = lowercaseKeys3(this.requestOptions.headers)[header];
+          if (headerValue2) {
+            clientHeader = typeof headerValue2 === "number" ? headerValue2.toString() : headerValue2;
           }
         }
         const additionalValue = additionalHeaders[header];
@@ -50891,14 +50891,14 @@ var require_lib2 = __commonJS({
       _getExistingOrDefaultContentTypeHeader(additionalHeaders, _default) {
         let clientHeader;
         if (this.requestOptions && this.requestOptions.headers) {
-          const headerValue = lowercaseKeys3(this.requestOptions.headers)[Headers2.ContentType];
-          if (headerValue) {
-            if (typeof headerValue === "number") {
-              clientHeader = String(headerValue);
-            } else if (Array.isArray(headerValue)) {
-              clientHeader = headerValue.join(", ");
+          const headerValue2 = lowercaseKeys3(this.requestOptions.headers)[Headers2.ContentType];
+          if (headerValue2) {
+            if (typeof headerValue2 === "number") {
+              clientHeader = String(headerValue2);
+            } else if (Array.isArray(headerValue2)) {
+              clientHeader = headerValue2.join(", ");
             } else {
-              clientHeader = headerValue;
+              clientHeader = headerValue2;
             }
           }
         }
@@ -61046,9 +61046,9 @@ var HttpClient = class {
   _getExistingOrDefaultHeader(additionalHeaders, header, _default) {
     let clientHeader;
     if (this.requestOptions && this.requestOptions.headers) {
-      const headerValue = lowercaseKeys(this.requestOptions.headers)[header];
-      if (headerValue) {
-        clientHeader = typeof headerValue === "number" ? headerValue.toString() : headerValue;
+      const headerValue2 = lowercaseKeys(this.requestOptions.headers)[header];
+      if (headerValue2) {
+        clientHeader = typeof headerValue2 === "number" ? headerValue2.toString() : headerValue2;
       }
     }
     const additionalValue = additionalHeaders[header];
@@ -61070,14 +61070,14 @@ var HttpClient = class {
   _getExistingOrDefaultContentTypeHeader(additionalHeaders, _default) {
     let clientHeader;
     if (this.requestOptions && this.requestOptions.headers) {
-      const headerValue = lowercaseKeys(this.requestOptions.headers)[Headers.ContentType];
-      if (headerValue) {
-        if (typeof headerValue === "number") {
-          clientHeader = String(headerValue);
-        } else if (Array.isArray(headerValue)) {
-          clientHeader = headerValue.join(", ");
+      const headerValue2 = lowercaseKeys(this.requestOptions.headers)[Headers.ContentType];
+      if (headerValue2) {
+        if (typeof headerValue2 === "number") {
+          clientHeader = String(headerValue2);
+        } else if (Array.isArray(headerValue2)) {
+          clientHeader = headerValue2.join(", ");
         } else {
-          clientHeader = headerValue;
+          clientHeader = headerValue2;
         }
       }
     }
@@ -61727,6 +61727,7 @@ var CONTEXT_ONLY = ["TTFB"];
 var DEFAULT_SERVER_SAMPLES = 30;
 var SERVER_NEW_CONNECTIONS = 10;
 var SERVER_CONNECTIONS = 5;
+var SERVER_PIN_ATTEMPTS = 4;
 var SERVER_TIMEOUT_MS = 3e4;
 var COLD = { factor: 3, plusMs: 300, maxShare: 0.1 };
 var DEFAULT_ALPHA = 0.05;
@@ -62471,11 +62472,29 @@ function medianPair(base, head, key) {
   if (pair.baseMedian === null && pair.headMedian === null) return null;
   return { baseMedian: pair.baseMedian === null ? null : tidy(pair.baseMedian), headMedian: pair.headMedian === null ? null : tidy(pair.headMedian) };
 }
+function edgeFor(base, head) {
+  const count = (side) => {
+    const m = /* @__PURE__ */ new Map();
+    for (const s of side) if (s.edge) m.set(s.edge, (m.get(s.edge) ?? 0) + 1);
+    return m;
+  };
+  const [b, h] = [count(base), count(head)];
+  if (b.size === 0 || h.size === 0) return null;
+  const top = (m) => [...m].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
+  let compared = null;
+  let best = 0;
+  for (const [edge, n] of b) {
+    const both = Math.min(n, h.get(edge) ?? 0);
+    if (both >= MIN_SAMPLES && both > best) [compared, best] = [edge, both];
+  }
+  return { base: top(b), head: top(h), compared };
+}
 function dbLocation(samples) {
   const named = new Set(samples.flatMap((s) => s.dbLocation ? [s.dbLocation] : []));
   return named.size === 1 ? [...named][0] : null;
 }
 var databasesApart = (d) => Boolean(d?.dbLocation?.base && d.dbLocation.head && d.dbLocation.base !== d.dbLocation.head);
+var edgesApart = (d) => Boolean(d?.edge && !d.edge.compared);
 var goodLoads = (side) => side.filter((s) => s !== null);
 var sendsTiming = (s) => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null;
 var sendsServerTiming = (samples) => [samples.base, samples.head, samples.first?.base ?? [], samples.first?.head ?? []].some((side) => goodLoads(side).some(sendsTiming));
@@ -62483,7 +62502,7 @@ function staticSides(samples) {
   const isStatic = (measured, first = []) => goodLoads(measured).length >= MIN_SAMPLES && ![...goodLoads(first), ...goodLoads(measured)].some(sendsTiming);
   return { base: isStatic(samples.base, samples.first?.base), head: isStatic(samples.head, samples.first?.head) };
 }
-function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base: false, head: false }) {
+function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base: false, head: false }, connections = SERVER_CONNECTIONS) {
   if (statics.base && statics.head) return null;
   const anyStatic = statics.base || statics.head;
   const first = { base: goodLoads(samples.first?.base ?? []), head: goodLoads(samples.first?.head ?? []) };
@@ -62508,8 +62527,11 @@ function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base
       ].map((s) => s.ttfb)
     };
   };
-  const b = split("base");
-  const h = split("head");
+  const all = { base: split("base"), head: split("head") };
+  const edge = edgeFor(all.base.warm, all.head.warm);
+  const through = (warm) => edge?.compared ? warm.filter((s) => s.edge === edge.compared) : warm;
+  const b = { ...all.base, warm: through(all.base.warm) };
+  const h = { ...all.head, warm: through(all.head.warm) };
   if (b.warm.length < MIN_SAMPLES || h.warm.length < MIN_SAMPLES) return null;
   const source = !anyStatic && [...b.warm, ...h.warm].every((s) => s.total !== null) ? "server-timing" : "ttfb";
   const value = (s) => source === "server-timing" && s.total !== null ? s.total : s.ttfb;
@@ -62517,12 +62539,23 @@ function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base
   const hKept = h.warm.map(value);
   const summary2 = summarise(compareSamples(bKept, hKept, { alpha, ...floor }), bKept, hKept, false, false);
   if (summary2.baseMedian < floor.absFloor) summary2.deltaPct = null;
+  const perConnection = (side, warm) => {
+    const kept = new Set(warm);
+    return Array.from(
+      { length: connections },
+      (_2, c) => median(samples[side].flatMap((s, i) => s !== null && i % connections === c && kept.has(s) ? [value(s)] : []))
+    ).filter((m) => m !== null);
+  };
+  const bConn = perConnection("base", b.warm);
+  const hConn = perConnection("head", h.warm);
+  const byConnection = bConn.length >= MIN_SAMPLES && hConn.length >= MIN_SAMPLES ? compareSamples(bConn, hConn, { alpha, ...floor }) : null;
+  if (!anyStatic && byConnection && byConnection.verdict !== summary2.verdict) summary2.verdict = "no-change";
   if (anyStatic) {
     summary2.verdict = statics.head && summary2.verdict !== "regressed" && summary2.headMedian <= summary2.baseMedian ? "improved" : "no-change";
   }
   const where2 = { base: dbLocation(b.warm), head: dbLocation(h.warm) };
   const located = where2.base !== null || where2.head !== null ? where2 : null;
-  if (databasesApart({ dbLocation: located })) summary2.verdict = "no-change";
+  if (databasesApart({ dbLocation: located }) || edgesApart({ edge })) summary2.verdict = "no-change";
   return {
     base: bKept,
     head: hKept,
@@ -62533,6 +62566,8 @@ function summariseServer(samples, alpha, floor = FLOORS.Server, statics = { base
       db: medianPair(b.warm, h.warm, "db"),
       queries: medianPair(b.warm, h.warm, "queries"),
       dbLocation: located,
+      edge,
+      byConnection: byConnection ? { base: bConn.map(tidy), head: hConn.map(tidy), shift: tidy(byConnection.shift), pValue: tidy(byConnection.pValue), verdict: byConnection.verdict } : null,
       coldStarts: {
         source: { base: marked("base") ? "isolate" : "outliers", head: marked("head") ? "isolate" : "outliers" },
         base: b.cold,
@@ -62727,6 +62762,7 @@ function serverDetail(d, verdict) {
   return `Server ${parts.join(", ")}`;
 }
 function databasesApartDetail(d) {
+  if (edgesApart(d) && d.edge) return `Server requests reached main through ${d.edge.base} and this PR through ${d.edge.head}, so server time is not judged`;
   if (!databasesApart(d) || !d.dbLocation) return null;
   const db = d.db ? ` (db ${formatValue("Server", d.db.baseMedian)} to ${formatValue("Server", d.db.headMedian)})` : "";
   return `Database in ${d.dbLocation.base} on main and ${d.dbLocation.head} on this PR${db}, so server time is not judged`;
@@ -62777,7 +62813,7 @@ function pageTable(page, hasProd) {
     const t = tested(metric, s);
     const st2 = m.server?.static;
     let change = s.verdict === "no-change" ? formatChange(metric, t.baseMedian, t.headMedian, null) : `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`;
-    if (st2?.base && !st2.head || databasesApart(m.server)) change = "not judged";
+    if (st2?.base && !st2.head || databasesApart(m.server) || edgesApart(m.server)) change = "not judged";
     const cell = (side, v) => `${formatValue(metric, v)}${st2?.[side] ? `${NBSP}(static)` : ""}`;
     return `| ${[metric, cell("base", s.baseMedian), cell("head", s.headMedian), change].join(" | ")} |`;
   });
@@ -68995,16 +69031,16 @@ function serializationPolicy(options = {}) {
 function serializeHeaders(request2, operationArguments, operationSpec) {
   if (operationSpec.headerParameters) {
     for (const headerParameter of operationSpec.headerParameters) {
-      let headerValue = getOperationArgumentValueFromParameter(operationArguments, headerParameter);
-      if (headerValue !== null && headerValue !== void 0 || headerParameter.mapper.required) {
-        headerValue = operationSpec.serializer.serialize(headerParameter.mapper, headerValue, getPathStringFromParameter(headerParameter));
+      let headerValue2 = getOperationArgumentValueFromParameter(operationArguments, headerParameter);
+      if (headerValue2 !== null && headerValue2 !== void 0 || headerParameter.mapper.required) {
+        headerValue2 = operationSpec.serializer.serialize(headerParameter.mapper, headerValue2, getPathStringFromParameter(headerParameter));
         const headerCollectionPrefix = headerParameter.mapper.headerCollectionPrefix;
         if (headerCollectionPrefix) {
-          for (const key of Object.keys(headerValue)) {
-            request2.headers.set(headerCollectionPrefix + key, headerValue[key]);
+          for (const key of Object.keys(headerValue2)) {
+            request2.headers.set(headerCollectionPrefix + key, headerValue2[key]);
           }
         } else {
-          request2.headers.set(headerParameter.mapper.serializedName || getPathStringFromParameter(headerParameter), headerValue);
+          request2.headers.set(headerParameter.mapper.serializedName || getPathStringFromParameter(headerParameter), headerValue2);
         }
       }
     }
@@ -69673,10 +69709,10 @@ var HttpHeaders = class _HttpHeaders {
    * @param headerName - The name of the header to set. This value is case-insensitive.
    * @param headerValue - The value of the header to set.
    */
-  set(headerName, headerValue) {
+  set(headerName, headerValue2) {
     this._headersMap[getHeaderKey(headerName)] = {
       name: headerName,
-      value: headerValue.toString()
+      value: headerValue2.toString()
     };
   }
   /**
@@ -106256,6 +106292,22 @@ function serverRequestHeaders(device, extra) {
   for (const [name, value] of Object.entries(extra)) headers[name.toLowerCase()] = value;
   return headers;
 }
+var headerValue = (v) => Array.isArray(v) ? v[0] ?? "" : v ?? "";
+function edgeOf(headers) {
+  const ray = /-([A-Z]{3})$/.exec(headerValue(headers["cf-ray"]).trim());
+  if (ray) return ray[1];
+  const pop = /^([A-Z]{3})\d/.exec(headerValue(headers["x-amz-cf-pop"]).trim());
+  if (pop) return pop[1];
+  const vercel = /^([a-z]{3}\d)::/.exec(headerValue(headers["x-vercel-id"]).trim());
+  return vercel ? vercel[1] : null;
+}
+function commonEdge(samples) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const s of samples) if (s?.edge) counts.set(s.edge, (counts.get(s.edge) ?? 0) + 1);
+  let best = null;
+  for (const [edge, n] of counts) if (best === null || n > (counts.get(best) ?? 0)) best = edge;
+  return best;
+}
 function splitOutside(value, separator) {
   const parts = [];
   let current = "";
@@ -106343,7 +106395,7 @@ function timeGet(url3, headers, connection, timeoutMs = SERVER_TIMEOUT_MS) {
         else {
           const timing = res.headers["server-timing"];
           const header = Array.isArray(timing) ? timing.join(", ") : timing ?? null;
-          resolve2({ ttfb: Math.round(ttfb * 10) / 10, ...parseServerTiming(header) });
+          resolve2({ ttfb: Math.round(ttfb * 10) / 10, edge: edgeOf(res.headers), ...parseServerTiming(header) });
         }
       });
     });
@@ -106364,7 +106416,18 @@ function logLine(s) {
   if (s.db !== null) parts.push(`db ${Math.round(s.db)} ms`);
   if (s.queries !== null) parts.push(`${s.queries} queries`);
   if (s.dbLocation !== null) parts.push(`db in ${s.dbLocation}`);
+  if (s.edge) parts.push(`via ${s.edge}`);
   return parts.join(", ");
+}
+async function pinnedWarmUp(send, reconnect, target, attempts = SERVER_PIN_ATTEMPTS, missed = () => {
+}) {
+  let sample = await send();
+  for (let tries = 1; reconnect && target && sample.edge && sample.edge !== target && tries < attempts; tries++) {
+    missed(sample);
+    reconnect();
+    sample = await send();
+  }
+  return sample;
 }
 async function sampleServer({
   path: path4,
@@ -106375,6 +106438,7 @@ async function sampleServer({
   connections,
   request: request2,
   newConnection,
+  reconnect,
   log: log3
 }) {
   const sides = [
@@ -106398,7 +106462,18 @@ async function sampleServer({
     if (line.length > 0) log3(`  ${path4} server ${label}: ${line.join("; ")}`);
   };
   await phase("new connections", newConnections, (url3) => newConnection(url3));
-  await phase("warm-up", connections, request2);
+  const target = commonEdge([...first.base, ...first.head]);
+  await phase(
+    "warm-up",
+    connections,
+    (url3, side, i) => pinnedWarmUp(
+      () => request2(url3, side, i),
+      reconnect ? () => reconnect(side, i) : void 0,
+      target,
+      SERVER_PIN_ATTEMPTS,
+      (sample) => first[side].push(sample)
+    )
+  );
   for (let round2 = 0; round2 < samples; round2++) {
     const line = [];
     for (const side of roundOrder(sides, round2)) {
@@ -106441,6 +106516,10 @@ async function measureServer(run2) {
         connections: SERVER_CONNECTIONS,
         request: (url3, side, i) => timeGet(url3, headers, pools[side][i]),
         newConnection: (url3) => timeGet(url3, headers, null),
+        reconnect: (side, i) => {
+          closeConnection(pools[side][i]);
+          pools[side][i] = keptAliveConnection();
+        },
         log: run2.log
       });
       out.set(page.path, samples);

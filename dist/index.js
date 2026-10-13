@@ -62501,6 +62501,7 @@ var edgesApart = (d) => Boolean(d?.edge && d.edge.compared.length === 0);
 var goodLoads = (side) => side.filter((s) => s !== null);
 var sendsTiming = (s) => s.total !== null || s.db !== null || s.queries !== null || s.isolate !== null;
 var sendsServerTiming = (samples) => [samples.base, samples.head, samples.first?.base ?? [], samples.first?.head ?? []].some((side) => goodLoads(side).some(sendsTiming));
+var renderingChanged = (s) => s !== void 0 && s.base !== s.head;
 function staticSides(samples) {
   const isStatic = (measured, first = []) => goodLoads(measured).length >= MIN_SAMPLES && ![...goodLoads(first), ...goodLoads(measured)].some(sendsTiming);
   return { base: isStatic(samples.base, samples.first?.base), head: isStatic(samples.head, samples.first?.head) };
@@ -62607,11 +62608,17 @@ function buildResult({
     ciRunUrl: meta.ciRunUrl,
     config: meta.config,
     pages: pages.map((p) => {
-      const page = summarisePage(p.path, p.loads, alpha);
       const statics = p.server && timed ? staticSides(p.server) : { base: false, head: false };
+      const page = summarisePage(p.path, p.loads, alpha, renderingChanged(statics) ? { firstByte: [] } : {});
       const server = p.server ? summariseServer(p.server, alpha, void 0, statics) : null;
       if (server) page.metrics.Server = server;
-      return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null, serverStatic: statics.base && statics.head };
+      return {
+        ...page,
+        failures: p.failures,
+        serverFailures: p.server?.failures ?? null,
+        serverStatic: statics.base && statics.head,
+        staticSides: statics
+      };
     }),
     meta: { alpha, prodLoads, durationMs, generatedAt }
   };
@@ -62661,9 +62668,9 @@ function sortedMetrics(page) {
   const repeat = fcpRepeatsLcp(page);
   return metricEntries(page).filter(([metric]) => !CONTEXT_ONLY.includes(metric) && !(repeat && metric === "FCP")).sort(([a, x], [b, y]) => VERDICT_RANK[x.summary.verdict] - VERDICT_RANK[y.summary.verdict] || METRICS.indexOf(a) - METRICS.indexOf(b));
 }
-function tested(metric, s) {
+function tested(s) {
   const t = s.fromFirstByte ?? s;
-  return { baseMedian: t.baseMedian, headMedian: t.headMedian, deltaPct: t.deltaPct, change: formatChange(metric, t.baseMedian, t.headMedian, t.deltaPct) };
+  return { baseMedian: t.baseMedian, headMedian: t.headMedian, deltaPct: t.deltaPct };
 }
 function flagged(pages, verdict) {
   return pages.flatMap(
@@ -62678,7 +62685,7 @@ var capitalise = (s) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
 var plainValue = (metric, v) => formatValue(metric, v).replaceAll(NBSP, " ");
 function diffBlock(flags) {
   const rows = flags.map((f) => {
-    const t = tested(f.metric, f.result.summary);
+    const t = tested(f.result.summary);
     const pct = f.metric === "CLS" || t.deltaPct === null ? "" : ` (${Math.abs(Math.round(t.deltaPct))}%)`;
     return {
       sign: f.verdict === "regressed" ? "-" : "+",
@@ -62783,14 +62790,38 @@ function firstByteGap(metric, s) {
   const gap = s.headMedian - s.baseMedian - (s.fromFirstByte.headMedian - s.fromFirstByte.baseMedian);
   return Math.abs(gap) < FLOORS[metric].absFloor ? null : gap;
 }
-function firstByteDetail(rows) {
+function againstVerdict(s) {
+  if (s.verdict === "improved") return s.headMedian >= s.baseMedian;
+  if (s.verdict === "regressed") return s.headMedian <= s.baseMedian;
+  return false;
+}
+function shownChange(metric, s) {
+  if (firstByteGap(metric, s) === null || againstVerdict(s)) return tested(s);
+  return { baseMedian: s.baseMedian, headMedian: s.headMedian, deltaPct: s.deltaPct };
+}
+function firstByteDetail(rows, server) {
   const gaps = rows.flatMap(([metric, m]) => {
     const gap2 = firstByteGap(metric, m.summary);
-    return gap2 === null ? [] : [[metric, gap2]];
+    return gap2 === null ? [] : [[metric, m.summary, gap2]];
   });
   if (gaps.length === 0) return null;
-  const gap = gaps[0][1];
-  return `First byte ${gap > 0 ? "+" : MINUS}${formatValue("TTFB", Math.abs(gap))}, left out of ${listJoin(gaps.map(([metric]) => metric))}`;
+  const judged = gaps.map(([metric, s]) => {
+    const t = tested(s);
+    return `${metric} ${formatChange(metric, t.baseMedian, t.headMedian, null)}`;
+  });
+  const gap = gaps[0][2];
+  const time = server ? `, server time ${formatChange("Server", server.summary.baseMedian, server.summary.headMedian, null)}` : "";
+  return `Judged after the first byte: ${judged.join(", ")}. First byte ${gap > 0 ? "+" : MINUS}${formatValue("TTFB", Math.abs(gap))} left out${time}`;
+}
+function staticDetail(page, rows) {
+  const st = page.staticSides ?? page.metrics.Server?.server?.static;
+  if (!st || !renderingChanged(st)) return null;
+  const line = `Server ${st.head ? "now" : "no longer"} static`;
+  const whole = rows.filter(([metric, m]) => FROM_FIRST_BYTE.includes(metric) && !m.summary.fromFirstByte).map(([metric]) => metric);
+  if (whole.length === 0) return line;
+  const ttfb = page.metrics.TTFB?.summary;
+  const firstByte = ttfb ? ` (${formatValue("TTFB", ttfb.baseMedian)} to ${formatValue("TTFB", ttfb.headMedian)})` : "";
+  return `${line}, so ${listJoin(whole)} ${whole.length === 1 ? "counts" : "count"} the first byte${firstByte}`;
 }
 function formatBytes(bytes2) {
   const abs = Math.abs(bytes2);
@@ -62815,24 +62846,22 @@ function pageTable(page, hasProd) {
   const shown = sortedMetrics(page).filter(([metric, m]) => !allZero(metric, m.summary));
   const rows = shown.map(([metric, m]) => {
     const s = m.summary;
-    const t = tested(metric, s);
-    const st2 = m.server?.static;
-    let change = s.verdict === "no-change" ? formatChange(metric, t.baseMedian, t.headMedian, null) : `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`;
-    if (st2?.base && !st2.head || databasesApart(m.server) || edgesApart(m.server)) change = "not judged";
-    const cell = (side, v) => `${formatValue(metric, v)}${st2?.[side] ? `${NBSP}(static)` : ""}`;
+    const c = shownChange(metric, s);
+    const st = m.server?.static;
+    let change = s.verdict === "no-change" ? formatChange(metric, c.baseMedian, c.headMedian, null) : `**${capitalise(directionWord(metric, s.verdict))}** ${formatChange(metric, c.baseMedian, c.headMedian, c.deltaPct)}`;
+    if (st?.base && !st.head || databasesApart(m.server) || edgesApart(m.server)) change = "not judged";
+    const cell = (side, v) => `${formatValue(metric, v)}${st?.[side] ? `${NBSP}(static)` : ""}`;
     return `| ${[metric, cell("base", s.baseMedian), cell("head", s.headMedian), change].join(" | ")} |`;
   });
   const server = page.metrics.Server;
-  const st = server?.server?.static;
-  const oneSided = st !== void 0 && st.base !== st.head;
-  const staticNote = oneSided ? st.head ? "Server now static" : "Server no longer static" : null;
+  const oneSided = renderingChanged(server?.server?.static);
   const prod = shown.flatMap(([metric, m]) => {
     const v = m.summary.vsProd?.prodMedian;
     return typeof v === "number" && Number.isFinite(v) ? [`${metric} ${formatValue(metric, v)}`] : [];
   });
   const notes = [
-    firstByteDetail(shown),
-    staticNote,
+    firstByteDetail(shown, server),
+    staticDetail(page, shown),
     server?.server && !oneSided ? serverDetail(server.server, server.summary.verdict) : null,
     server?.server ? databasesApartDetail(server.server) : null,
     server?.server ? coldStartDetail(server.server.coldStarts) : null,

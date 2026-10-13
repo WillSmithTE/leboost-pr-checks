@@ -12,10 +12,10 @@
 | Metric | main | this PR | Change |
 |---|---|---|---|
 | Server | 140 ms | 25 ms (static) | **Faster** −115 ms (−82%) |
-| LCP | 2.02 s | 2.04 s | +18 ms |
-| FCP | 1.70 s | 1.72 s | +15 ms |
+| LCP | 2.02 s | 2.04 s | +20 ms |
+| FCP | 1.70 s | 1.72 s | +17 ms |
 
-<sub>Server now static<br>prod for reference: LCP 2.02 s, FCP 1.71 s</sub>
+<sub>Server now static, so LCP and FCP count the first byte (180 ms to 182 ms)<br>prod for reference: LCP 2.02 s, FCP 1.71 s</sub>
 
 **`/`**
 

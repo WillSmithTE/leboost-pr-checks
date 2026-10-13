@@ -7,13 +7,13 @@
 
 | Metric | main | this PR | Change |
 |---|---|---|---|
-| LCP | 5.14 s | 5.46 s | +10 ms |
-| FCP | 3.40 s | 3.72 s | +10 ms |
+| LCP | 5.14 s | 5.46 s | +322 ms |
+| FCP | 3.40 s | 3.72 s | +322 ms |
 | CLS | 0.002 | 0.002 | 0.000 |
 | TBT | 445 ms | 459 ms | +14 ms |
 | Server | 150 ms | 150 ms | 0 ms |
 
-<sub>First byte +312 ms, left out of LCP and FCP<br>prod for reference: LCP 4.05 s, FCP 2.26 s, CLS 0.002, TBT 790 ms</sub>
+<sub>Judged after the first byte: LCP +10 ms, FCP +10 ms. First byte +312 ms left out, server time 0 ms<br>prod for reference: LCP 4.05 s, FCP 2.26 s, CLS 0.002, TBT 790 ms</sub>
 
 **`/docs`**
 

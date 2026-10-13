@@ -17,6 +17,7 @@ import { notMeasuredComment } from '../src/main'
 import type { Load, Metrics } from '../src/run'
 import type { ServerLoad, ServerSamples } from '../src/server'
 import fixture from './fixtures/run.json'
+import staticHome from './fixtures/static-home.json'
 
 const META: Omit<BuildInput, 'pages'> = { ...fixture.meta, config: { ...fixture.meta.config, device: 'mobile', serverRequests: 0 } }
 const FIXTURE_PAGES: PageInput[] = fixture.pages
@@ -224,6 +225,42 @@ function historyFor(result: RunResult): History {
 	)
 }
 
+// A real run (fixtures/static-home.json): `/` became a static file on the PR, `/docs` stayed server rendered.
+interface JsonServerLoad {
+	ttfb: number
+	edge: string | null
+	total: number | null
+	db: number | null
+	queries: number | null
+	dbLocation: string | null
+	isolate: string | null
+}
+const serverLoad = (s: JsonServerLoad): ServerLoad => ({ ...s, isolate: s.isolate === 'cold' || s.isolate === 'warm' ? s.isolate : null })
+const STATIC_HOME: PageInput[] = staticHome.pages.map(p => ({
+	path: p.path,
+	loads: p.loads,
+	failures: p.failures,
+	server: {
+		base: p.server.base.map(serverLoad),
+		head: p.server.head.map(serverLoad),
+		first: { base: p.server.first.base.map(serverLoad), head: p.server.first.head.map(serverLoad) },
+		failures: p.server.failures,
+	},
+}))
+// The same run with the sides swapped: a page that stopped being static.
+const swapSides = (p: PageInput): PageInput => ({
+	...p,
+	loads: { base: p.loads.head, head: p.loads.base },
+	server: p.server && {
+		...p.server,
+		base: p.server.head,
+		head: p.server.base,
+		first: p.server.first && { base: p.server.first.head, head: p.server.first.base },
+	},
+})
+const realRun = (pages: PageInput[]): RunResult =>
+	build({ prodUrl: null, config: { ...META.config, pairs: 8, serverRequests: SERVER_REQUESTS }, pages })
+
 const SCENARIOS: Record<string, RunResult> = {
 	clean: scenario({}),
 	'slow-preview-server': slowPreviewServer(),
@@ -271,6 +308,8 @@ const SCENARIOS: Record<string, RunResult> = {
 	'missing-prod': scenario({ prod: false, docs: { ...DOCS, TBT: 80 } }),
 	'dropped-metric': scenario({ missing: { '/': { LCP: [0, 2, 3, 4, 5, 7] } } }),
 	'not-compared': scenario({ prod: false, headDown: true }),
+	'static-home': realRun(STATIC_HOME),
+	'static-home-reversed': realRun(STATIC_HOME.map(swapSides)),
 }
 
 // Copy outside the table rules: no em dashes, double dashes or empty intensifiers.
@@ -456,8 +495,8 @@ describe('renderComment', () => {
 		const md = render(build({ prodUrl: null, pages: [{ path: '/', loads: { base: side(1500, 3900), head: side(150, 4200) }, failures: {} }] }))
 		// Raw LCP fell 1.05 s, yet the line says slower: it reports the time after the first byte.
 		expect(md).toMatch(/^- LCP {2}\/ {2}300 ms slower \(8%\)$/m)
-		// The row says why the medians and the change disagree.
-		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%) |\n\n<sub>First byte −1.35 s, left out of LCP</sub>')
+		// The full change (−1.05 s) runs against the verdict, so Change shows what was judged and the note says what was left out.
+		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%) |\n\n<sub>Judged after the first byte: LCP +300 ms. First byte −1.35 s left out</sub>')
 		// FCP here is LCP, so one regression; the 1.35 s faster first byte of the page loads counts nowhere.
 		expect(md).toContain('### Lab web vitals: 1 regression vs main\n')
 		expect(md).not.toContain('| FCP |')
@@ -488,10 +527,12 @@ describe('renderComment', () => {
 		const md = render(SCENARIOS['slow-preview-server'])
 		// The page loads saw a 314 ms slower first byte on `/`; warm requests found the servers equal.
 		expect(md).toContain('### Lab web vitals: no significant change vs main\n')
-		// One note under the table explains why the medians are 320 ms apart while Change is 10 ms.
-		expect(md).toContain('| LCP | 5.14 s | 5.46 s | +10 ms |')
-		expect(md).toContain('| FCP | 3.40 s | 3.72 s | +10 ms |')
-		expect(md).toContain('| Server | 150 ms | 150 ms | 0 ms |\n\n<sub>First byte +312 ms, left out of LCP and FCP<br>prod for reference:')
+		// Change agrees with the medians; one note says only 10 ms of it is judged, and what was left out.
+		expect(md).toContain('| LCP | 5.14 s | 5.46 s | +322 ms |')
+		expect(md).toContain('| FCP | 3.40 s | 3.72 s | +322 ms |')
+		expect(md).toContain(
+			'| Server | 150 ms | 150 ms | 0 ms |\n\n<sub>Judged after the first byte: LCP +10 ms, FCP +10 ms. First byte +312 ms left out, server time 0 ms<br>prod for reference:',
+		)
 		// On /docs the first byte did not move past the floor, so no note.
 		expect(md.match(/First byte/g)).toHaveLength(1)
 		expect(md).not.toMatch(/\| TTFB \||server responded|usually not the code/)
@@ -593,6 +634,105 @@ describe('renderComment', () => {
 		expect(md).toContain('Server no longer static')
 		expect(md).not.toMatch(/Slower|\+ ?\d+ ms \(\+/)
 	})
+
+	it('counts the first byte in LCP when a page became static, so painting 962 ms sooner reads as that, not −54 ms', () => {
+		const result = SCENARIOS['static-home']
+		const [home, docs] = result.pages
+		expect(home.staticSides).toEqual({ base: false, head: true })
+		// Main's first byte was cold on 5 of 8 loads (1.12 to 1.54 s); the static file never was.
+		expect(home.metrics.LCP?.summary).toMatchObject({ verdict: 'improved', baseMedian: 4012, headMedian: 3050, fromFirstByte: null })
+		// Server rendered on both sides: cold first bytes there are the preview's, so /docs is still judged after them.
+		expect(docs.staticSides).toEqual({ base: false, head: false })
+		expect(docs.metrics.LCP?.summary.verdict).toBe('no-change')
+		expect(docs.metrics.LCP?.summary.fromFirstByte).not.toBeNull()
+		const md = render(result)
+		expect(md).toContain('### Lab web vitals: 2 improvements vs main\n')
+		expect(md).toMatch(/^\+ LCP {5}\/ {2}962 ms faster \(24%\)$/m)
+		expect(md).toContain('| LCP | 4.01 s | 3.05 s | **Faster** −962 ms (−24%) |')
+		expect(md).toContain('<sub>Server now static, so LCP counts the first byte (1.14 s to 104 ms)<br>')
+		expect(md).not.toContain('−54 ms')
+		// /docs: Change agrees with the medians, and the note says what the verdict left out.
+		expect(md).toContain('| LCP | 3.45 s | 3.95 s | +498 ms |')
+		// The job log rounds documentStart, so 1 ms off the posted comment's +20 and +478.
+		expect(md).toContain('<sub>Judged after the first byte: LCP +19 ms. First byte +479 ms left out, server time +7 ms<br>')
+	})
+
+	it('flags LCP when a page stopped being static and paints 962 ms later', () => {
+		const result = SCENARIOS['static-home-reversed']
+		expect(result.pages[0].metrics.LCP?.summary.verdict).toBe('regressed')
+		expect(verdictKey(result)).toBe('regressed LCP:%2F')
+		const md = render(result)
+		expect(md).toContain('| LCP | 3.05 s | 4.01 s | **Slower** +962 ms (+32%) |')
+		expect(md).toContain('| Server | 24 ms (static) | 61 ms | not judged |')
+		expect(md).toContain('<sub>Server no longer static, so LCP counts the first byte (104 ms to 1.14 s)<br>')
+	})
+
+	it('never shows a Change far below the full change without saying what was left out', () => {
+		// mulberry32: the same runs every time, so a failure reproduces.
+		let seed = 325
+		const rand = (): number => {
+			seed = (seed + 0x6d2b79f5) | 0
+			let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+			t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+		}
+		// A share of loads with a cold first byte, the browser ready at about 200 ms, then paint after both.
+		const side = (cold: number, paint: number): Metrics[] =>
+			Array.from({ length: 8 }, () => {
+				const TTFB = rand() < cold ? 1000 + rand() * 900 : 50 + rand() * 200
+				const documentStart = Math.max(TTFB, 170 + rand() * 80) + rand() * 40
+				const p = paint + rand() * 150 - 75
+				return { TTFB, documentStart, LCP: documentStart + p, FCP: documentStart + p * 0.7, CLS: 0, TBT: 0 }
+			})
+		const ms = (cell: string): number => {
+			const m = /([+−]?)(\d+(?:\.\d+)?) (ms|s)/.exec(cell)
+			if (!m) throw new Error(`no time in ${cell}`)
+			return (m[1] === '−' ? -1 : 1) * Number(m[2]) * (m[3] === 's' ? 1000 : 1)
+		}
+		const shapes: [ServerTimeCentre, ServerTimeCentre][] = [
+			[{ ms: 120, marker: true }, { ms: 120, marker: true }],
+			[{ ms: 120, marker: true }, { ms: 25 }],
+			[{ ms: 25 }, { ms: 120, marker: true }],
+			[{ ms: 120, marker: true }, { ms: 420, marker: true }],
+		]
+		let explained = 0
+		for (let run = 0; run < 120; run++) {
+			const [base, head] = shapes[run % shapes.length]
+			const paint = 2000 + rand() * 1000
+			const page: PageInput = {
+				path: '/',
+				loads: { base: side(rand(), paint), head: side(rand(), paint + (rand() < 0.5 ? 0 : rand() * 1200 - 600)) },
+				failures: {},
+				server: serverSamples(base, head),
+			}
+			const result = realRun([page])
+			const md = render(result)
+			const note = /^<sub>((?!Report only).*)<\/sub>$/m.exec(md)?.[1] ?? ''
+			const rendering = result.pages[0].staticSides
+			for (const metric of ['LCP', 'FCP'] as const) {
+				const row = new RegExp(`^\\| ${metric} \\| ([^|]+) \\| ([^|]+) \\| ([^|]+) \\|$`, 'm').exec(md)
+				if (!row) continue
+				const full = ms(row[2]) - ms(row[1])
+				const change = row[3].trim() === '0 ms' ? 0 : ms(row[3])
+				// The verdict word and the number beside it never disagree.
+				if (row[3].includes('**Faster**')) expect(change).toBeLessThan(0)
+				if (row[3].includes('**Slower**')) expect(change).toBeGreaterThan(0)
+				// Within the 100 ms floor (plus 20 ms of rounding on values in seconds) of the full change, or the note says why.
+				const far = Math.abs(full) - Math.abs(change) >= 120 || (Math.abs(full) >= 120 && Math.sign(change) !== Math.sign(full))
+				if (far) {
+					expect(note).toMatch(new RegExp(`Judged after the first byte: [^.]*${metric} `))
+					explained++
+				}
+				// A static file on one side only: the first byte is the PR's, never left out.
+				if (rendering && rendering.base !== rendering.head) {
+					expect(result.pages[0].metrics[metric]?.summary.fromFirstByte).toBeNull()
+					expect(note).not.toContain('left out')
+				}
+			}
+		}
+		// The note path was exercised, not just skipped.
+		expect(explained).toBeGreaterThan(10)
+	}, 30_000)
 
 	it('keeps comparing first bytes when no page in the run ever sends Server-Timing', () => {
 		const plain = scenario({ server: { '/': serverSamples({ ms: 120 }), '/docs': serverSamples({ ms: 60 }, { ms: 360 }) } })

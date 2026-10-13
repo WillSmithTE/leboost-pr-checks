@@ -102,6 +102,8 @@ export interface PageResult {
 	serverFailures: ServerSamples['failures'] | null
 	// Both sides are static files: there is no server time to compare, so no Server or cold start rows.
 	serverStatic: boolean
+	// Which sides are static files. Static on one side only: LCP and FCP are judged whole, first byte included.
+	staticSides?: StaticSides
 }
 
 export interface RunConfig {
@@ -329,6 +331,8 @@ const sendsTiming = (s: ServerSample): boolean => s.total !== null || s.db !== n
 export const sendsServerTiming = (samples: ServerSamples): boolean =>
 	[samples.base, samples.head, samples.first?.base ?? [], samples.first?.head ?? []].some(side => goodLoads(side).some(sendsTiming))
 
+export const renderingChanged = (s: StaticSides | undefined): boolean => s !== undefined && s.base !== s.head
+
 // A side is static when it has enough good requests and none carried Server-Timing.
 export function staticSides(samples: ServerSamples): StaticSides {
 	const isStatic = (measured: readonly ServerLoad[], first: readonly ServerLoad[] = []): boolean =>
@@ -467,11 +471,18 @@ export function buildResult({
 		ciRunUrl: meta.ciRunUrl,
 		config: meta.config,
 		pages: pages.map(p => {
-			const page = summarisePage(p.path, p.loads, alpha)
 			const statics = p.server && timed ? staticSides(p.server) : { base: false, head: false }
+			// A static file has no cold starts or server work, so a first byte gap between static and server rendered is the PR's.
+			const page = summarisePage(p.path, p.loads, alpha, renderingChanged(statics) ? { firstByte: [] } : {})
 			const server = p.server ? summariseServer(p.server, alpha, undefined, statics) : null
 			if (server) page.metrics.Server = server
-			return { ...page, failures: p.failures, serverFailures: p.server?.failures ?? null, serverStatic: statics.base && statics.head }
+			return {
+				...page,
+				failures: p.failures,
+				serverFailures: p.server?.failures ?? null,
+				serverStatic: statics.base && statics.head,
+				staticSides: statics,
+			}
 		}),
 		meta: { alpha, prodLoads, durationMs, generatedAt },
 	}
@@ -542,9 +553,9 @@ function sortedMetrics(page: PageResult): [MetricName, MetricResult][] {
 }
 
 // The change a verdict is about: for LCP and FCP their time after the first byte, otherwise the raw medians.
-function tested(metric: MetricName, s: MetricSummary): FromFirstByte & { change: string } {
+function tested(s: MetricSummary): FromFirstByte {
 	const t = s.fromFirstByte ?? s
-	return { baseMedian: t.baseMedian, headMedian: t.headMedian, deltaPct: t.deltaPct, change: formatChange(metric, t.baseMedian, t.headMedian, t.deltaPct) }
+	return { baseMedian: t.baseMedian, headMedian: t.headMedian, deltaPct: t.deltaPct }
 }
 
 type Significant = Exclude<Verdict, 'no-change'>
@@ -578,7 +589,7 @@ const plainValue = (metric: MetricName, v: number): string => formatValue(metric
 // plain monospace in email. Sizes are unsigned; the word carries the direction.
 function diffBlock(flags: readonly Flag[]): string[] {
 	const rows = flags.map(f => {
-		const t = tested(f.metric, f.result.summary)
+		const t = tested(f.result.summary)
 		const pct = f.metric === 'CLS' || t.deltaPct === null ? '' : ` (${Math.abs(Math.round(t.deltaPct))}%)`
 		return {
 			sign: f.verdict === 'regressed' ? '-' : '+',
@@ -716,15 +727,45 @@ function firstByteGap(metric: MetricName, s: MetricSummary): number | null {
 	return Math.abs(gap) < FLOORS[metric].absFloor ? null : gap
 }
 
-// "First byte +312 ms, left out of LCP and FCP": why main and this PR can be far apart while Change is small.
-function firstByteDetail(rows: readonly [MetricName, MetricResult][]): string | null {
+// The verdict word must agree with the number beside it.
+function againstVerdict(s: MetricSummary): boolean {
+	if (s.verdict === 'improved') return s.headMedian >= s.baseMedian
+	if (s.verdict === 'regressed') return s.headMedian <= s.baseMedian
+	return false
+}
+
+// Change shows the full change, as main and this PR read, unless it runs against the verdict; the note says what was left out.
+function shownChange(metric: MetricName, s: MetricSummary): FromFirstByte {
+	if (firstByteGap(metric, s) === null || againstVerdict(s)) return tested(s)
+	return { baseMedian: s.baseMedian, headMedian: s.headMedian, deltaPct: s.deltaPct }
+}
+
+// "Judged after the first byte: LCP +20 ms. First byte +478 ms left out, server time +7 ms": what Change does not show.
+function firstByteDetail(rows: readonly [MetricName, MetricResult][], server: MetricResult | undefined): string | null {
 	const gaps = rows.flatMap(([metric, m]) => {
 		const gap = firstByteGap(metric, m.summary)
-		return gap === null ? [] : [[metric, gap] as const]
+		return gap === null ? [] : [[metric, m.summary, gap] as const]
 	})
 	if (gaps.length === 0) return null
-	const gap = gaps[0][1]
-	return `First byte ${gap > 0 ? '+' : MINUS}${formatValue('TTFB', Math.abs(gap))}, left out of ${listJoin(gaps.map(([metric]) => metric))}`
+	const judged = gaps.map(([metric, s]) => {
+		const t = tested(s)
+		return `${metric} ${formatChange(metric, t.baseMedian, t.headMedian, null)}`
+	})
+	const gap = gaps[0][2]
+	const time = server ? `, server time ${formatChange('Server', server.summary.baseMedian, server.summary.headMedian, null)}` : ''
+	return `Judged after the first byte: ${judged.join(', ')}. First byte ${gap > 0 ? '+' : MINUS}${formatValue('TTFB', Math.abs(gap))} left out${time}`
+}
+
+// "Server now static, so LCP counts the first byte (1.14 s to 104 ms)": a static file has no cold starts or server work.
+function staticDetail(page: PageResult, rows: readonly [MetricName, MetricResult][]): string | null {
+	const st = page.staticSides ?? page.metrics.Server?.server?.static
+	if (!st || !renderingChanged(st)) return null
+	const line = `Server ${st.head ? 'now' : 'no longer'} static`
+	const whole = rows.filter(([metric, m]) => FROM_FIRST_BYTE.includes(metric) && !m.summary.fromFirstByte).map(([metric]) => metric)
+	if (whole.length === 0) return line
+	const ttfb = page.metrics.TTFB?.summary
+	const firstByte = ttfb ? ` (${formatValue('TTFB', ttfb.baseMedian)} to ${formatValue('TTFB', ttfb.headMedian)})` : ''
+	return `${line}, so ${listJoin(whole)} ${whole.length === 1 ? 'counts' : 'count'} the first byte${firstByte}`
 }
 
 export function formatBytes(bytes: number): string {
@@ -758,29 +799,27 @@ function pageTable(page: PageResult, hasProd: boolean): string[] {
 	const shown = sortedMetrics(page).filter(([metric, m]) => !allZero(metric, m.summary))
 	const rows = shown.map(([metric, m]) => {
 		const s = m.summary
-		const t = tested(metric, s)
+		const c = shownChange(metric, s)
 		const st = m.server?.static
 		// A percent only where the change counts; on a quiet row it is noise and wraps the cell on a phone.
 		let change =
 			s.verdict === 'no-change'
-				? formatChange(metric, t.baseMedian, t.headMedian, null)
-				: `**${capitalise(directionWord(metric, s.verdict))}** ${t.change}`
+				? formatChange(metric, c.baseMedian, c.headMedian, null)
+				: `**${capitalise(directionWord(metric, s.verdict))}** ${formatChange(metric, c.baseMedian, c.headMedian, c.deltaPct)}`
 		// A static side's first byte is not server time, so a page that stopped being static gets no verdict and no sign.
 		if ((st?.base && !st.head) || databasesApart(m.server) || edgesApart(m.server)) change = 'not judged'
 		const cell = (side: 'base' | 'head', v: number): string => `${formatValue(metric, v)}${st?.[side] ? `${NBSP}(static)` : ''}`
 		return `| ${[metric, cell('base', s.baseMedian), cell('head', s.headMedian), change].join(' | ')} |`
 	})
 	const server = page.metrics.Server
-	const st = server?.server?.static
-	const oneSided = st !== undefined && st.base !== st.head
-	const staticNote = oneSided ? (st.head ? 'Server now static' : 'Server no longer static') : null
+	const oneSided = renderingChanged(server?.server?.static)
 	const prod = shown.flatMap(([metric, m]) => {
 		const v = m.summary.vsProd?.prodMedian
 		return typeof v === 'number' && Number.isFinite(v) ? [`${metric} ${formatValue(metric, v)}`] : []
 	})
 	const notes = [
-		firstByteDetail(shown),
-		staticNote,
+		firstByteDetail(shown, server),
+		staticDetail(page, shown),
 		server?.server && !oneSided ? serverDetail(server.server, server.summary.verdict) : null,
 		server?.server ? databasesApartDetail(server.server) : null,
 		server?.server ? coldStartDetail(server.server.coldStarts) : null,

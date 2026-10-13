@@ -155,8 +155,10 @@ The requests use the mobile browser's user agent and your `headers`.
   static file, not server code. Both sides static: the page gets no Server or cold start rows. Static on the PR only: the row
   shows both first bytes, notes `Server now static`, and counts as an improvement. Static on main only: both values, the
   note `Server no longer static` and `not judged`, never a regression. A static side's first byte is never compared with
-  the other side's `Server-Timing` total, so those cases test first bytes on both sides. A site that sends `Server-Timing`
-  nowhere in the run cannot be told from a static one, so it is judged as before.
+  the other side's `Server-Timing` total, so those cases test first bytes on both sides. LCP and FCP on such a page count
+  the first byte, so a page that stops being static and paints later is a regression there (see
+  [Method](#method)). A site that sends `Server-Timing` nowhere in the run cannot be told from a static one, so it is
+  judged as before.
 - **Why not the page loads' TTFB.** Each page load opens a fresh connection in a fresh browser context, and on serverless
   previews that first byte flips between about 0.1 s and 1.3 to 1.9 s for minutes at a time (most likely new connections
   landing on cold isolates). In A/A runs a verdict on it fired 63 to 73% of the time. Warm requests on kept-alive connections do not
@@ -415,12 +417,22 @@ up to 80 samples, ties included) and a Hodges-Lehmann shift with its confidence 
 **Paint is measured from the first byte.** LCP and FCP are tested as each load's value minus its TTFB, or minus the moment
 the page's first script could run when that is later: a server that answers in a millisecond beats the browser's own
 start-up by about 200 ms, and without this a 300 ms slower server read as 160 ms faster paint on the demo. Preview servers
-switch between fast and slow first bytes for minutes at a time, on their own, and that used to swamp real paint changes. The
-table's main and this PR columns still show the full medians, and Change shows the time after the first byte, so the two
-can disagree: when the first byte moved by more than the floor, a line under the first paint row says so, for example
-`first byte +312 ms, not counted`. Server time has its own row, measured on warm connections (see
-[Server time](#server-time)), so a server slowdown counts once, there. A static side has no server time and is labelled
-`static` in that row, see Static pages under Server time.
+switch between fast and slow first bytes for minutes at a time, on their own, and that used to swamp real paint changes:
+over 47 runs on Usero, judging whole LCP on server rendered pages would have flagged 23 regressions that were cold starts on
+a freshly deployed preview, one of them on a PR that changed nothing. Server time has its own row, measured on warm
+connections (see [Server time](#server-time)), so a server slowdown counts once, there.
+
+Change always agrees with the main and this PR columns: it shows the full change, and when the first byte moved the
+medians by the floor or more, a line under the table says what was judged and what was left out, for example
+`Judged after the first byte: LCP +20 ms. First byte +478 ms left out, server time +7 ms`. Only when the full change runs
+against the verdict (paint 300 ms slower behind a first byte 1.3 s faster) does Change show the judged time instead, with
+the same line.
+
+**Static on one side only, paint counts the first byte.** A static file has no cold starts and no server work, so when a
+page is a static file on one side and server rendered on the other, the first byte gap is the PR's doing: LCP and FCP are
+judged whole, first byte included, and the line reads `Server now static, so LCP counts the first byte (1.14 s to 104 ms)`.
+A page that became static and paints 962 ms sooner is a 962 ms improvement (v0.6.3 showed it as −54 ms, not judged), and
+a page that stopped being static and paints later is a regression. See Static pages under Server time.
 
 **prod is for reference only.** Its medians sit on one line under each page's table and never change a verdict. Production
 can load third-party tags, real data and warm caches that the previews do not, so a gap between prod and the PR is usually

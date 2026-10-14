@@ -13,7 +13,7 @@
 | TBT | 445 ms | 459 ms | +14 ms |
 | Server | 150 ms | 150 ms | 0 ms |
 
-<sub>Judged after the first byte: LCP +10 ms, FCP +10 ms. First byte +312 ms left out, server time 0 ms<br>prod for reference: LCP 4.05 s, FCP 2.26 s, CLS 0.002, TBT 790 ms</sub>
+<sub>LCP and FCP +322 ms each: +312 ms first byte, +10 ms after it. Only the time after the first byte is judged. Server time itself: 0 ms<br>prod for reference: LCP 4.05 s, FCP 2.26 s, CLS 0.002, TBT 790 ms</sub>
 
 **`/docs`**
 

@@ -62800,28 +62800,29 @@ function shownChange(metric, s) {
   return { baseMedian: s.baseMedian, headMedian: s.headMedian, deltaPct: s.deltaPct };
 }
 function firstByteDetail(rows, server) {
-  const gaps = rows.flatMap(([metric, m]) => {
-    const gap2 = firstByteGap(metric, m.summary);
-    return gap2 === null ? [] : [[metric, m.summary, gap2]];
-  });
-  if (gaps.length === 0) return null;
-  const judged = gaps.map(([metric, s]) => {
+  const splits = rows.flatMap(([metric, m]) => {
+    const s = m.summary;
+    const gap = firstByteGap(metric, s);
+    if (gap === null) return [];
     const t = tested(s);
-    return `${metric} ${formatChange(metric, t.baseMedian, t.headMedian, null)}`;
+    const split = `${formatChange(metric, s.baseMedian, s.headMedian, null)}: ${formatChange("TTFB", 0, gap, null)} first byte, ${formatChange(metric, t.baseMedian, t.headMedian, null)} after it`;
+    return [{ metric, split }];
   });
-  const gap = gaps[0][2];
-  const time = server ? `, server time ${formatChange("Server", server.summary.baseMedian, server.summary.headMedian, null)}` : "";
-  return `Judged after the first byte: ${judged.join(", ")}. First byte ${gap > 0 ? "+" : MINUS}${formatValue("TTFB", Math.abs(gap))} left out${time}`;
+  if (splits.length === 0) return null;
+  const same = splits.length > 1 && splits.every(({ split }) => split === splits[0].split);
+  const clauses = same ? [`${listJoin(splits.map(({ metric }) => metric))} ${splits[0].split.replace(":", " each:")}`] : splits.map(({ metric, split }) => `${metric} ${split}`);
+  const time = server ? `. Server time itself: ${formatChange("Server", server.summary.baseMedian, server.summary.headMedian, null)}` : "";
+  return `${clauses.join(". ")}. Only the time after the first byte is judged${time}`;
 }
 function staticDetail(page, rows) {
   const st = page.staticSides ?? page.metrics.Server?.server?.static;
   if (!st || !renderingChanged(st)) return null;
-  const line = `Server ${st.head ? "now" : "no longer"} static`;
+  const line = st.head ? "Page is static on this PR, not on main" : "Page is static on main, not on this PR";
   const whole = rows.filter(([metric, m]) => FROM_FIRST_BYTE.includes(metric) && !m.summary.fromFirstByte).map(([metric]) => metric);
   if (whole.length === 0) return line;
   const ttfb = page.metrics.TTFB?.summary;
   const firstByte = ttfb ? ` (${formatValue("TTFB", ttfb.baseMedian)} to ${formatValue("TTFB", ttfb.headMedian)})` : "";
-  return `${line}, so ${listJoin(whole)} ${whole.length === 1 ? "counts" : "count"} the first byte${firstByte}`;
+  return `${line}, so ${listJoin(whole)} ${whole.length === 1 ? "is" : "are"} judged with the first byte${firstByte}`;
 }
 function formatBytes(bytes2) {
   const abs = Math.abs(bytes2);

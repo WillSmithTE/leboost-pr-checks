@@ -496,7 +496,7 @@ describe('renderComment', () => {
 		// Raw LCP fell 1.05 s, yet the line says slower: it reports the time after the first byte.
 		expect(md).toMatch(/^- LCP {2}\/ {2}300 ms slower \(8%\)$/m)
 		// The full change (−1.05 s) runs against the verdict, so Change shows what was judged and the note says what was left out.
-		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%) |\n\n<sub>Judged after the first byte: LCP +300 ms. First byte −1.35 s left out</sub>')
+		expect(md).toContain('| LCP | 5.41 s | 4.36 s | **Slower** +300 ms (+8%) |\n\n<sub>LCP −1.05 s: −1.35 s first byte, +300 ms after it. Only the time after the first byte is judged</sub>')
 		// FCP here is LCP, so one regression; the 1.35 s faster first byte of the page loads counts nowhere.
 		expect(md).toContain('### Lab web vitals: 1 regression vs main\n')
 		expect(md).not.toContain('| FCP |')
@@ -531,10 +531,10 @@ describe('renderComment', () => {
 		expect(md).toContain('| LCP | 5.14 s | 5.46 s | +322 ms |')
 		expect(md).toContain('| FCP | 3.40 s | 3.72 s | +322 ms |')
 		expect(md).toContain(
-			'| Server | 150 ms | 150 ms | 0 ms |\n\n<sub>Judged after the first byte: LCP +10 ms, FCP +10 ms. First byte +312 ms left out, server time 0 ms<br>prod for reference:',
+			'| Server | 150 ms | 150 ms | 0 ms |\n\n<sub>LCP and FCP +322 ms each: +312 ms first byte, +10 ms after it. Only the time after the first byte is judged. Server time itself: 0 ms<br>prod for reference:',
 		)
 		// On /docs the first byte did not move past the floor, so no note.
-		expect(md.match(/First byte/g)).toHaveLength(1)
+		expect(md.match(/first byte, /g)).toHaveLength(1)
 		expect(md).not.toMatch(/\| TTFB \||server responded|usually not the code/)
 	})
 
@@ -620,7 +620,7 @@ describe('renderComment', () => {
 		expect(md).toContain('### Lab web vitals: 1 improvement vs main\n')
 		expect(md).toContain('+ Server  /docs  115 ms faster (82%)')
 		expect(md).toContain('| Server | 140 ms | 25 ms (static) | **Faster** −115 ms (−82%) |')
-		expect(md).toContain('Server now static')
+		expect(md).toContain('Page is static on this PR, not on main')
 	})
 
 	it('never reads a page that stopped being static as a regression', () => {
@@ -631,7 +631,7 @@ describe('renderComment', () => {
 		expect(verdictKey(result)).toBe('clean')
 		const md = render(result)
 		expect(md).toContain('| Server | 25 ms (static) | 140 ms | not judged |')
-		expect(md).toContain('Server no longer static')
+		expect(md).toContain('Page is static on main, not on this PR')
 		expect(md).not.toMatch(/Slower|\+ ?\d+ ms \(\+/)
 	})
 
@@ -649,12 +649,14 @@ describe('renderComment', () => {
 		expect(md).toContain('### Lab web vitals: 2 improvements vs main\n')
 		expect(md).toMatch(/^\+ LCP {5}\/ {2}962 ms faster \(24%\)$/m)
 		expect(md).toContain('| LCP | 4.01 s | 3.05 s | **Faster** −962 ms (−24%) |')
-		expect(md).toContain('<sub>Server now static, so LCP counts the first byte (1.14 s to 104 ms)<br>')
+		expect(md).toContain('<sub>Page is static on this PR, not on main, so LCP is judged with the first byte (1.14 s to 104 ms)<br>')
 		expect(md).not.toContain('−54 ms')
 		// /docs: Change agrees with the medians, and the note says what the verdict left out.
 		expect(md).toContain('| LCP | 3.45 s | 3.95 s | +498 ms |')
 		// The job log rounds documentStart, so 1 ms off the posted comment's +20 and +478.
-		expect(md).toContain('<sub>Judged after the first byte: LCP +19 ms. First byte +479 ms left out, server time +7 ms<br>')
+		expect(md).toContain(
+			'<sub>LCP +498 ms: +479 ms first byte, +19 ms after it. Only the time after the first byte is judged. Server time itself: +7 ms<br>',
+		)
 	})
 
 	it('flags LCP when a page stopped being static and paints 962 ms later', () => {
@@ -664,7 +666,7 @@ describe('renderComment', () => {
 		const md = render(result)
 		expect(md).toContain('| LCP | 3.05 s | 4.01 s | **Slower** +962 ms (+32%) |')
 		expect(md).toContain('| Server | 24 ms (static) | 61 ms | not judged |')
-		expect(md).toContain('<sub>Server no longer static, so LCP counts the first byte (104 ms to 1.14 s)<br>')
+		expect(md).toContain('<sub>Page is static on main, not on this PR, so LCP is judged with the first byte (104 ms to 1.14 s)<br>')
 	})
 
 	it('never shows a Change far below the full change without saying what was left out', () => {
@@ -720,13 +722,13 @@ describe('renderComment', () => {
 				// Within the 100 ms floor (plus 20 ms of rounding on values in seconds) of the full change, or the note says why.
 				const far = Math.abs(full) - Math.abs(change) >= 120 || (Math.abs(full) >= 120 && Math.sign(change) !== Math.sign(full))
 				if (far) {
-					expect(note).toMatch(new RegExp(`Judged after the first byte: [^.]*${metric} `))
+					expect(note).toMatch(new RegExp(`\\b${metric}\\b[^:<]*: [+−][^,]+ first byte, [^,]+ after it`))
 					explained++
 				}
 				// A static file on one side only: the first byte is the PR's, never left out.
 				if (rendering && rendering.base !== rendering.head) {
 					expect(result.pages[0].metrics[metric]?.summary.fromFirstByte).toBeNull()
-					expect(note).not.toContain('left out')
+					expect(note).not.toContain('after it')
 				}
 			}
 		}

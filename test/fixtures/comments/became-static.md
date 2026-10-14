@@ -15,7 +15,7 @@
 | LCP | 2.02 s | 2.04 s | +20 ms |
 | FCP | 1.70 s | 1.72 s | +17 ms |
 
-<sub>Server now static, so LCP and FCP count the first byte (180 ms to 182 ms)<br>prod for reference: LCP 2.02 s, FCP 1.71 s</sub>
+<sub>Page is static on this PR, not on main, so LCP and FCP are judged with the first byte (180 ms to 182 ms)<br>prod for reference: LCP 2.02 s, FCP 1.71 s</sub>
 
 **`/`**
 

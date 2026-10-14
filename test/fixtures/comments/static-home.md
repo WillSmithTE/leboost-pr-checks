@@ -17,7 +17,7 @@
 | CLS | 0.002 | 0.002 | 0.000 |
 | TBT | 289 ms | 284 ms | −5 ms |
 
-<sub>Server now static, so LCP counts the first byte (1.14 s to 104 ms)<br>Cold starts 1.33 s to none (9 and 0 of 45), not judged</sub>
+<sub>Page is static on this PR, not on main, so LCP is judged with the first byte (1.14 s to 104 ms)<br>Cold starts 1.33 s to none (9 and 0 of 45), not judged</sub>
 
 **`/docs`**
 
@@ -27,7 +27,7 @@
 | TBT | 474 ms | 576 ms | +102 ms |
 | Server | 57 ms | 64 ms | +7 ms |
 
-<sub>Judged after the first byte: LCP +19 ms. First byte +479 ms left out, server time +7 ms<br>Cold starts 1.19 s to 1.27 s (3 and 8 of 45), not judged</sub>
+<sub>LCP +498 ms: +479 ms first byte, +19 ms after it. Only the time after the first byte is judged. Server time itself: +7 ms<br>Cold starts 1.19 s to 1.27 s (3 and 8 of 45), not judged</sub>
 
 </details>
 

@@ -153,8 +153,8 @@ The requests use the mobile browser's user agent and your `headers`.
   side's measured requests can be left out this way; more than that is how the server behaves, so they stay in.
 - **Static pages.** When the site sends `Server-Timing` on some pages, a side that sends none for a page is a prerendered
   static file, not server code. Both sides static: the page gets no Server or cold start rows. Static on the PR only: the row
-  shows both first bytes, notes `Server now static`, and counts as an improvement. Static on main only: both values, the
-  note `Server no longer static` and `not judged`, never a regression. A static side's first byte is never compared with
+  shows both first bytes, notes `Page is static on this PR, not on main`, and counts as an improvement. Static on main only:
+  both values, the note `Page is static on main, not on this PR` and `not judged`, never a regression. A static side's first byte is never compared with
   the other side's `Server-Timing` total, so those cases test first bytes on both sides. LCP and FCP on such a page count
   the first byte, so a page that stops being static and paints later is a regression there (see
   [Method](#method)). A site that sends `Server-Timing` nowhere in the run cannot be told from a static one, so it is
@@ -423,14 +423,16 @@ a freshly deployed preview, one of them on a PR that changed nothing. Server tim
 connections (see [Server time](#server-time)), so a server slowdown counts once, there.
 
 Change always agrees with the main and this PR columns: it shows the full change, and when the first byte moved the
-medians by the floor or more, a line under the table says what was judged and what was left out, for example
-`Judged after the first byte: LCP +20 ms. First byte +478 ms left out, server time +7 ms`. Only when the full change runs
+medians by the floor or more, a line under the table splits the change into the first byte and the time after it, for
+example `LCP +498 ms: +479 ms first byte, +19 ms after it. Only the time after the first byte is judged. Server time
+itself: +7 ms`. Only when the full change runs
 against the verdict (paint 300 ms slower behind a first byte 1.3 s faster) does Change show the judged time instead, with
 the same line.
 
 **Static on one side only, paint counts the first byte.** A static file has no cold starts and no server work, so when a
 page is a static file on one side and server rendered on the other, the first byte gap is the PR's doing: LCP and FCP are
-judged whole, first byte included, and the line reads `Server now static, so LCP counts the first byte (1.14 s to 104 ms)`.
+judged whole, first byte included, and the line reads `Page is static on this PR, not on main, so LCP is judged with the
+first byte (1.14 s to 104 ms)`.
 A page that became static and paints 962 ms sooner is a 962 ms improvement (v0.6.3 showed it as −54 ms, not judged), and
 a page that stopped being static and paints later is a regression. See Static pages under Server time.
 

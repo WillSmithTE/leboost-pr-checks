@@ -42,11 +42,42 @@ export function contextRounds(loads: number, rounds: number): Set<number> {
 
 export const firstLine = (err: unknown): string => String(err instanceof Error ? err.message : err).split('\n')[0]
 
-// One discarded load per side wakes cold Workers or lambdas before anything is recorded.
-export async function warmUp({ page, sides, measure, log }: { page: PageSpec; sides: readonly Side[]; measure: Measure; log: Log }) {
-	for (const side of sides) {
-		await measure(joinUrl(side.url, page.path), page).catch((err: unknown) => log(`  warm-up ${side.name} failed: ${firstLine(err)}`))
+// Runs fn over items with at most limit in flight, results in item order.
+export async function inPool<T, R>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+	const out: R[] = new Array<R>(items.length)
+	let next = 0
+	const worker = async (): Promise<void> => {
+		while (next < items.length) {
+			const i = next++
+			out[i] = await fn(items[i], i)
+		}
 	}
+	await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker))
+	return out
+}
+
+// Each round's sides in order: one after another, or all started together (in the rotated order) when parallel.
+export async function eachSide<T, R>(order: readonly T[], parallel: boolean, fn: (item: T) => Promise<R>): Promise<R[]> {
+	return inPool(order, parallel ? order.length : 1, item => fn(item))
+}
+
+// One discarded load per side wakes cold Workers or lambdas before anything is recorded.
+export async function warmUp({
+	page,
+	sides,
+	measure,
+	log,
+	parallel = false,
+}: {
+	page: PageSpec
+	sides: readonly Side[]
+	measure: Measure
+	log: Log
+	parallel?: boolean
+}) {
+	await eachSide(sides, parallel, side =>
+		measure(joinUrl(side.url, page.path), page).catch((err: unknown) => log(`  warm-up ${side.name} failed: ${firstLine(err)}`)),
+	)
 }
 
 export interface PageSamples {
@@ -56,6 +87,7 @@ export interface PageSamples {
 
 // Sides with context: true load in only contextLoads of the rounds, and never on a page with prod: false. Returns per side
 // one entry per load, null when it failed (for main and the PR the index is the round), and the failure reasons.
+// parallel loads a round's sides at the same moment, so main and the PR share the runner's CPU equally.
 export async function samplePage({
 	page,
 	sides: allSides,
@@ -63,6 +95,7 @@ export async function samplePage({
 	contextLoads = rounds,
 	measure,
 	log,
+	parallel = false,
 }: {
 	page: PageSpec
 	sides: readonly Side[]
@@ -70,6 +103,7 @@ export async function samplePage({
 	contextLoads?: number
 	measure: Measure
 	log: Log
+	parallel?: boolean
 }): Promise<PageSamples> {
 	const sides = page.prod ? allSides : allSides.filter(s => !s.context)
 	const samples: PageSamples['samples'] = { base: [], head: [] }
@@ -86,18 +120,23 @@ export async function samplePage({
 		const order = roundOrder(compared, round)
 		const k = withContext.indexOf(round)
 		if (k >= 0) order.splice(k % (order.length + 1), 0, ...sides.filter(s => s.context))
-		for (const side of order) {
-			try {
-				const metrics = await measure(joinUrl(side.url, page.path), page)
-				samples[side.name]?.push(metrics)
-				log(`  ${page.path} #${round + 1} ${side.name}: ${formatMetrics(metrics)}`)
-			} catch (err) {
-				const reason = firstLine(err)
+		const loads = await eachSide(order, parallel, side =>
+			measure(joinUrl(side.url, page.path), page).then(
+				(metrics): { metrics: Metrics } | { reason: string } => ({ metrics }),
+				(err: unknown) => ({ reason: firstLine(err) }),
+			),
+		)
+		order.forEach((side, i) => {
+			const load = loads[i]
+			if ('metrics' in load) {
+				samples[side.name]?.push(load.metrics)
+				log(`  ${page.path} #${round + 1} ${side.name}: ${formatMetrics(load.metrics)}`)
+			} else {
 				samples[side.name]?.push(null)
-				failures[side.name]?.push(reason)
-				log(`  ${page.path} #${round + 1} ${side.name}: FAILED ${reason}`)
+				failures[side.name]?.push(load.reason)
+				log(`  ${page.path} #${round + 1} ${side.name}: FAILED ${load.reason}`)
 			}
-		}
+		})
 	}
 	return { samples, failures }
 }

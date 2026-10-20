@@ -7,7 +7,8 @@ it to.
 
 <img src="docs/comment-regression.png" alt="The comment on a pull request that made the hero image heavier: Lab web vitals, 1 regression vs main, with a diff line reading LCP on / 533 ms slower (85%), a trend chart of main's LCP with this PR's 1.37 s set apart, and a short table of LCP and FCP." width="390">
 
-This is a pre-release. Inputs may change before v1, so pin `@v0` and check the release notes when you update.
+This is a pre-release. Inputs may change before v1, so pin `@v0` and check the release notes when you update. v0.7.0
+(main and the PR loaded at the same moment, about half the run time) is not on `@v0` yet; pin `@v0.7.0` to try it.
 
 ## Quick start
 
@@ -78,6 +79,8 @@ image and a PR that changes nothing, with the comment this action posted on each
 | `prod-paths`         | every path            | Which of `paths` also load `prod-url`, in the same format. Leave out a page that does not exist on production (one seeded only on previews, say): it gets no prod loads and no prod line. Naming a path not in `paths` is a setup error. |
 | `rounds`             | `8`                   | Rounds per page, 3 to 50. Each round loads main and the PR once, in alternating order.                                                   |
 | `server-samples`     | `30`                  | Server time requests per side and page, 10 to 200, or `0` to turn server time off. See [Server time](#server-time).                      |
+| `parallel`           | `true`                | Load main and the PR at the same moment in each round, and send their server time requests together. About half the run time. `false` loads them one after the other, as before v0.7. See [Run time](#run-time). |
+| `parallel-pages`     | `1`                   | With `parallel`, how many paths to measure at once, 1 to 4. Each needs about two CPUs; the action lowers it to fit the runner. |
 | `device`             | `mobile`              | `mobile` (Lighthouse's Slow 4G and 4x CPU profile) or `desktop`.                                                                         |
 | `interact`           |                       | INP measurement: one `PATH::SELECTOR` per line, clicked after load. Without it INP is not reported.                                      |
 | `headers`            |                       | Extra request headers, one `Name: value` per line, sent only to the head, base and prod sites, and with the server time requests.       |
@@ -114,7 +117,7 @@ This run's main is the newest point. Runs on another device or base URL are neve
 ## Server time
 
 Before any page loads, the action sends plain GET requests (no browser, no throttling) to each path on main and the PR,
-alternating main and PR: 10 per side on a new connection each, then 5 kept-alive connections per side that each get one
+in rounds of one main and one PR request sent together (one after the other, alternating, with `parallel: false`): 10 per side on a new connection each, then 5 kept-alive connections per side that each get one
 warm-up request, then `server-samples` (30) per side rotating over those 5. The measured ones are timed from sending the
 request to the first byte of the response, with connection setup left out, so it is the server's work plus one network
 round trip from the runner. Rotating matters: a connection stays on one server machine, and with a single connection
@@ -374,7 +377,15 @@ A load takes 2 to 10 seconds at the mobile profile, depending on the page. A run
 `rounds` x 2 loads, plus 3 loads per path in `prod-paths` when `prod-url` is set. Server time comes first and takes seconds: 90 requests
 per path at your server's speed, plus a second or so for each cold start it meets. With the default 8 rounds on one path, the action took
 52 s on the demo's one-page static site and 93 s on a small marketing site's home page. On Usero (pages of about 1 MB) 8
-rounds on two paths with prod took 6.5 to 7 minutes.
+rounds on two paths with prod took 6.5 to 7 minutes (both before v0.7, one load at a time).
+
+Since v0.7 main and the PR load at the same moment, so a run takes about half as long. In an A/A test on Usero's main
+preview (6 paths, 8 rounds, in a container pinned to 2 CPUs like a private repo's runner) a run took 7.1 to 7.3 minutes,
+against 12.7 to 17.2 one load at a time, and neither mode flagged anything. Sharing the CPUs widens the spread a little
+(paint after the first byte: middle 50% of loads 60 to 106 ms wide, against 29 ms in the calmest sequential run), which
+costs some power on small changes but adds no false alarms: both sides of a pair share the same contention.
+`parallel-pages: 2` took 4.1 minutes but tripled TBT and its spread, and four throttled loads on 2 CPUs sometimes stalled
+for the full 60 s timeout, so it only helps on a runner with 4 or more CPUs.
 
 Set `timeout-minutes` on the job, and add a `concurrency` group (as in the Cloudflare recipe) so a new push cancels the old
 run.
@@ -399,8 +410,10 @@ at load plus settle, so it covers the loading phase only. INP needs a real inter
 `interact`, never estimated.
 
 **Interleaved rounds.** One discarded warm-up load per preview wakes cold servers. Then each round loads main and the PR
-once, alternating which goes first, so slow drift on the runner lands on both sides equally. Prod, when given, gets 3 loads
-spread over the rounds.
+once, at the same moment in separate browser contexts (alternating which starts first), so both get the same runner, the
+same CPU contention and the same moment of the previews' server swings. Prod, when given, gets 3 loads spread over the
+rounds, alongside that round's pair. With `parallel: false` the two load one after the other instead, alternating which
+goes first, so slow drift on the runner lands on both sides equally.
 
 **The test.** Per page and metric, the PR is compared with main by a one-sided Mann-Whitney U test in each direction (exact
 up to 80 samples, ties included) and a Hodges-Lehmann shift with its confidence interval. A change counts when p < 0.05

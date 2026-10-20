@@ -119,6 +119,36 @@ describe('sampleServer', () => {
 		expect(out.head).toEqual([null, { ...none, ttfb: 11 }, { ...none, ttfb: 14 }])
 		expect(out.failures).toEqual({ base: [], head: ['HTTP 502'] })
 	})
+
+	it('in parallel sends each round of main and PR together and keeps the same samples per side', async () => {
+		let inFlight = 0
+		let most = 0
+		const send = async (side: string, i: number): Promise<ServerSample> => {
+			inFlight++
+			most = Math.max(most, inFlight)
+			await new Promise(r => setTimeout(r, 5))
+			inFlight--
+			if (side === 'head' && i === 1) throw new Error('HTTP 503')
+			return { ...none, ttfb: side === 'base' ? 1 : 2 }
+		}
+		const out = await sampleServer({
+			path: '/',
+			baseUrl: 'https://main.test',
+			headUrl: 'https://pr.test',
+			samples: 4,
+			newConnections: 2,
+			connections: 2,
+			request: (_url, side, i) => send(side, i),
+			newConnection: async url => ({ ...none, ttfb: url.includes('main') ? 1 : 2 }),
+			log: quiet,
+			parallel: true,
+		})
+		expect(most).toBe(2)
+		expect(out.base.map(s => s?.ttfb ?? null)).toEqual([1, 1, 1, 1])
+		expect(out.head.map(s => s?.ttfb ?? null)).toEqual([2, null, 2, null])
+		expect(out.failures.head).toEqual(['HTTP 503', 'HTTP 503'])
+		expect(out.first?.head.map(s => s?.ttfb ?? null)).toEqual([2, 2, 2, null])
+	})
 })
 
 describe('sampleServer edge pinning', () => {

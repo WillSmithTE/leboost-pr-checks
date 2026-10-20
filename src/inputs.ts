@@ -1,6 +1,6 @@
 // Action inputs, parsed and validated. Every error message names the input so a first setup is easy to fix.
 import { CHART_BASE_URL } from './chart'
-import { DEFAULT_SERVER_SAMPLES, DEVICES, type DeviceName } from './config'
+import { DEFAULT_PARALLEL_PAGES, DEFAULT_SERVER_SAMPLES, DEVICES, type DeviceName } from './config'
 import type { BundleSizes } from './report'
 import type { PageSpec } from './run'
 
@@ -19,6 +19,9 @@ export interface Inputs {
 	comment: boolean
 	headers: Record<string, string>
 	failOnRegression: boolean
+	// Main and PR loaded at the same moment; false loads them back to back as before v0.7.
+	parallel: boolean
+	parallelPages: number
 	prNumber: number | null
 	chartBaseUrl: string
 	bundle: BundleSizes
@@ -29,6 +32,7 @@ export type GetInput = (name: string) => string
 const MAX_ROUNDS = 50
 const MIN_SERVER_SAMPLES = 10
 const MAX_SERVER_SAMPLES = 200
+const MAX_PARALLEL_PAGES = 4
 
 // Paths never contain spaces, so any mix of newlines, spaces and commas separates them.
 const words = (raw: string): string[] => raw.split(/[\s,]+/).filter(Boolean)
@@ -141,6 +145,8 @@ export function parseInputs(get: GetInput): Inputs {
 		comment: bool('comment', input('comment'), true),
 		headers: parseHeaders(get('headers')),
 		failOnRegression: bool('fail-on-regression', input('fail-on-regression'), false),
+		parallel: bool('parallel', input('parallel'), true),
+		parallelPages: int('parallel-pages', input('parallel-pages', String(DEFAULT_PARALLEL_PAGES)), { min: 1, max: MAX_PARALLEL_PAGES }),
 		prNumber: prRaw ? int('pr-number', prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null,
 		chartBaseUrl: url('chart-base-url', input('chart-base-url', CHART_BASE_URL)),
 		bundle: { base: bytes('base-bundle-bytes', input('base-bundle-bytes')), head: bytes('head-bundle-bytes', input('head-bundle-bytes')) },

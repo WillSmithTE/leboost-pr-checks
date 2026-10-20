@@ -3,7 +3,7 @@
 import { Agent as HttpAgent, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { DEVICES, type DeviceName, SERVER_PIN_ATTEMPTS, SERVER_TIMEOUT_MS } from './config'
-import { firstLine, joinUrl, type Log, roundOrder } from './run'
+import { eachSide, firstLine, joinUrl, type Log, roundOrder } from './run'
 
 const DOCUMENT_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 
@@ -238,6 +238,7 @@ export async function sampleServer({
 	newConnection,
 	reconnect,
 	log,
+	parallel = false,
 }: {
 	path: string
 	baseUrl: string
@@ -249,6 +250,8 @@ export async function sampleServer({
 	newConnection: ServerRequest
 	reconnect?: (side: 'base' | 'head', connection: number) => void
 	log: Log
+	// Sends each round's main and PR requests at the same moment instead of one after the other.
+	parallel?: boolean
 }): Promise<ServerSamples> {
 	const sides = [
 		{ name: 'base', label: 'main', url: joinUrl(baseUrl, path) },
@@ -259,14 +262,13 @@ export async function sampleServer({
 	const phase = async (label: string, rounds: number, send: (url: string, side: 'base' | 'head', i: number) => Promise<ServerSample>): Promise<void> => {
 		const line: string[] = []
 		for (let i = 0; i < rounds; i++) {
-			for (const side of roundOrder(sides, i)) {
-				const sample = await send(side.url, side.name, i).catch((err: unknown) => {
-					line.push(`${side.label} failed (${firstLine(err)})`)
-					return null
-				})
-				first[side.name].push(sample)
-				if (sample) line.push(`${side.label} ${logLine(sample)}`)
-			}
+			const order = roundOrder(sides, i)
+			const results = await eachSide(order, parallel, side => settle(send(side.url, side.name, i)))
+			order.forEach((side, k) => {
+				const r = results[k]
+				first[side.name].push(r.sample)
+				line.push(r.sample ? `${side.label} ${logLine(r.sample)}` : `${side.label} failed (${r.reason})`)
+			})
 		}
 		if (line.length > 0) log(`  ${path} server ${label}: ${line.join('; ')}`)
 	}
@@ -282,20 +284,24 @@ export async function sampleServer({
 		),
 	)
 	for (let round = 0; round < samples; round++) {
-		const line: string[] = []
-		for (const side of roundOrder(sides, round)) {
-			try {
-				const sample = await request(side.url, side.name, round % connections)
-				out[side.name].push(sample)
-				line.push(`${side.label} ${logLine(sample)}`)
-			} catch (err) {
-				const reason = firstLine(err)
-				out[side.name].push(null)
-				out.failures[side.name].push(reason)
-				line.push(`${side.label} FAILED ${reason}`)
-			}
-		}
+		const order = roundOrder(sides, round)
+		const results = await eachSide(order, parallel, side => settle(request(side.url, side.name, round % connections)))
+		const line = order.map((side, k) => {
+			const r = results[k]
+			out[side.name].push(r.sample)
+			if (r.sample) return `${side.label} ${logLine(r.sample)}`
+			out.failures[side.name].push(r.reason)
+			return `${side.label} FAILED ${r.reason}`
+		})
 		log(`  ${path} server #${round + 1}: ${line.join('; ')}`)
 	}
 	return out
 }
+
+type Settled = { sample: ServerSample; reason: null } | { sample: null; reason: string }
+
+const settle = (p: Promise<ServerSample>): Promise<Settled> =>
+	p.then(
+		(sample): Settled => ({ sample, reason: null }),
+		(err: unknown): Settled => ({ sample: null, reason: firstLine(err) }),
+	)

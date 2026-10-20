@@ -32,6 +32,14 @@ inputs:
     description: Server time requests per side and path, 10 to 200, or 0 to turn server time off. Plain GETs on warm connections, a few seconds in all.
     required: false
     default: '30'
+  parallel:
+    description: Load main and the PR at the same moment in each round (and send their server time requests together), so both share the runner equally and a run takes about half as long. false loads them one after the other, as before v0.7.
+    required: false
+    default: 'true'
+  parallel-pages:
+    description: With parallel, how many paths to measure at once, 1 to 4. Each path loads main and the PR together, so each one needs about two CPUs; the action measures fewer at a time when the runner has fewer (a private repo's ubuntu-latest has 2, so 1).
+    required: false
+    default: '1'
   device:
     description: mobile (Lighthouse's Slow 4G and 4x CPU profile) or desktop.
     required: false

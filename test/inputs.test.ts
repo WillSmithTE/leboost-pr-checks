@@ -19,10 +19,17 @@ describe('parseInputs', () => {
 			comment: true,
 			headers: {},
 			failOnRegression: false,
+			parallel: true,
+			parallelPages: 1,
 			prNumber: null,
 			chartBaseUrl: 'https://usero.io/pr-checks/chart.png',
 			bundle: { base: null, head: null },
 		})
+	})
+
+	it('reads the parallel mode and refuses more than 4 paths at once', () => {
+		expect(parse({ ...minimal, parallel: 'false', 'parallel-pages': '3' })).toMatchObject({ parallel: false, parallelPages: 3 })
+		expect(() => parse({ ...minimal, 'parallel-pages': '6' })).toThrow('parallel-pages must be a whole number from 1 to 4')
 	})
 
 	it('reads bundle sizes in bytes, and an empty one as not given', () => {

@@ -61732,6 +61732,7 @@ var SERVER_TIMEOUT_MS = 3e4;
 var COLD = { factor: 3, plusMs: 300, maxShare: 0.1 };
 var DEFAULT_ALPHA = 0.05;
 var DEFAULT_PROD_LOADS = 3;
+var DEFAULT_PARALLEL_PAGES = 1;
 var SETTLE_MS = 500;
 var IDLE_TIMEOUT_MS = 2e3;
 
@@ -62127,6 +62128,7 @@ var InputError = class extends Error {
 var MAX_ROUNDS = 50;
 var MIN_SERVER_SAMPLES = 10;
 var MAX_SERVER_SAMPLES = 200;
+var MAX_PARALLEL_PAGES = 4;
 var words = (raw) => raw.split(/[\s,]+/).filter(Boolean);
 var lines = (raw) => raw.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
 function url(name, raw) {
@@ -62223,6 +62225,8 @@ function parseInputs(get) {
     comment: bool("comment", input("comment"), true),
     headers: parseHeaders(get("headers")),
     failOnRegression: bool("fail-on-regression", input("fail-on-regression"), false),
+    parallel: bool("parallel", input("parallel"), true),
+    parallelPages: int("parallel-pages", input("parallel-pages", String(DEFAULT_PARALLEL_PAGES)), { min: 1, max: MAX_PARALLEL_PAGES }),
     prNumber: prRaw ? int("pr-number", prRaw, { min: 1, max: Number.MAX_SAFE_INTEGER }) : null,
     chartBaseUrl: url("chart-base-url", input("chart-base-url", CHART_BASE_URL)),
     bundle: { base: bytes("base-bundle-bytes", input("base-bundle-bytes")), head: bytes("head-bundle-bytes", input("head-bundle-bytes")) }
@@ -62932,10 +62936,33 @@ function contextRounds(loads, rounds) {
   return new Set(Array.from({ length: n }, (_2, i) => Math.floor((i + 0.5) * rounds / n)));
 }
 var firstLine = (err) => String(err instanceof Error ? err.message : err).split("\n")[0];
-async function warmUp({ page, sides, measure, log: log3 }) {
-  for (const side of sides) {
-    await measure(joinUrl(side.url, page.path), page).catch((err) => log3(`  warm-up ${side.name} failed: ${firstLine(err)}`));
-  }
+async function inPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
+}
+async function eachSide(order, parallel, fn) {
+  return inPool(order, parallel ? order.length : 1, (item) => fn(item));
+}
+async function warmUp({
+  page,
+  sides,
+  measure,
+  log: log3,
+  parallel = false
+}) {
+  await eachSide(
+    sides,
+    parallel,
+    (side) => measure(joinUrl(side.url, page.path), page).catch((err) => log3(`  warm-up ${side.name} failed: ${firstLine(err)}`))
+  );
 }
 async function samplePage({
   page,
@@ -62943,7 +62970,8 @@ async function samplePage({
   rounds,
   contextLoads = rounds,
   measure,
-  log: log3
+  log: log3,
+  parallel = false
 }) {
   const sides = page.prod ? allSides : allSides.filter((s) => !s.context);
   const samples = { base: [], head: [] };
@@ -62958,18 +62986,25 @@ async function samplePage({
     const order = roundOrder(compared, round2);
     const k = withContext.indexOf(round2);
     if (k >= 0) order.splice(k % (order.length + 1), 0, ...sides.filter((s) => s.context));
-    for (const side of order) {
-      try {
-        const metrics = await measure(joinUrl(side.url, page.path), page);
-        samples[side.name]?.push(metrics);
-        log3(`  ${page.path} #${round2 + 1} ${side.name}: ${formatMetrics(metrics)}`);
-      } catch (err) {
-        const reason = firstLine(err);
+    const loads = await eachSide(
+      order,
+      parallel,
+      (side) => measure(joinUrl(side.url, page.path), page).then(
+        (metrics) => ({ metrics }),
+        (err) => ({ reason: firstLine(err) })
+      )
+    );
+    order.forEach((side, i) => {
+      const load = loads[i];
+      if ("metrics" in load) {
+        samples[side.name]?.push(load.metrics);
+        log3(`  ${page.path} #${round2 + 1} ${side.name}: ${formatMetrics(load.metrics)}`);
+      } else {
         samples[side.name]?.push(null);
-        failures[side.name]?.push(reason);
-        log3(`  ${page.path} #${round2 + 1} ${side.name}: FAILED ${reason}`);
+        failures[side.name]?.push(load.reason);
+        log3(`  ${page.path} #${round2 + 1} ${side.name}: FAILED ${load.reason}`);
       }
-    }
+    });
   }
   return { samples, failures };
 }
@@ -106213,6 +106248,7 @@ async function saveResult({ jsonPath, name, env, log: log3 }, client2 = new Defa
 }
 
 // src/vitals.ts
+import { availableParallelism } from "node:os";
 import { chromium } from "playwright-core";
 
 // src/headers.ts
@@ -106474,7 +106510,8 @@ async function sampleServer({
   request: request2,
   newConnection,
   reconnect,
-  log: log3
+  log: log3,
+  parallel = false
 }) {
   const sides = [
     { name: "base", label: "main", url: joinUrl(baseUrl2, path4) },
@@ -106485,14 +106522,13 @@ async function sampleServer({
   const phase = async (label, rounds, send) => {
     const line = [];
     for (let i = 0; i < rounds; i++) {
-      for (const side of roundOrder(sides, i)) {
-        const sample = await send(side.url, side.name, i).catch((err) => {
-          line.push(`${side.label} failed (${firstLine(err)})`);
-          return null;
-        });
-        first[side.name].push(sample);
-        if (sample) line.push(`${side.label} ${logLine(sample)}`);
-      }
+      const order = roundOrder(sides, i);
+      const results = await eachSide(order, parallel, (side) => settle(send(side.url, side.name, i)));
+      order.forEach((side, k) => {
+        const r = results[k];
+        first[side.name].push(r.sample);
+        line.push(r.sample ? `${side.label} ${logLine(r.sample)}` : `${side.label} failed (${r.reason})`);
+      });
     }
     if (line.length > 0) log3(`  ${path4} server ${label}: ${line.join("; ")}`);
   };
@@ -106510,30 +106546,32 @@ async function sampleServer({
     )
   );
   for (let round2 = 0; round2 < samples; round2++) {
-    const line = [];
-    for (const side of roundOrder(sides, round2)) {
-      try {
-        const sample = await request2(side.url, side.name, round2 % connections);
-        out[side.name].push(sample);
-        line.push(`${side.label} ${logLine(sample)}`);
-      } catch (err) {
-        const reason = firstLine(err);
-        out[side.name].push(null);
-        out.failures[side.name].push(reason);
-        line.push(`${side.label} FAILED ${reason}`);
-      }
-    }
+    const order = roundOrder(sides, round2);
+    const results = await eachSide(order, parallel, (side) => settle(request2(side.url, side.name, round2 % connections)));
+    const line = order.map((side, k) => {
+      const r = results[k];
+      out[side.name].push(r.sample);
+      if (r.sample) return `${side.label} ${logLine(r.sample)}`;
+      out.failures[side.name].push(r.reason);
+      return `${side.label} FAILED ${r.reason}`;
+    });
     log3(`  ${path4} server #${round2 + 1}: ${line.join("; ")}`);
   }
   return out;
 }
+var settle = (p) => p.then(
+  (sample) => ({ sample, reason: null }),
+  (err) => ({ sample: null, reason: firstLine(err) })
+);
 
 // src/vitals.ts
+var pathsAtOnce = (run2) => run2.parallel ? run2.parallelPages : 1;
+var browserPathsAtOnce = (requested, cpus) => Math.min(requested, Math.max(1, Math.floor(cpus / 2)));
 async function measureServer(run2) {
   const out = /* @__PURE__ */ new Map();
   if (run2.serverSamples === 0) return out;
   const headers = serverRequestHeaders(run2.device, run2.headers);
-  for (const page of run2.pages) {
+  await inPool(run2.pages, pathsAtOnce(run2), async (page) => {
     run2.log(
       `${page.path}: server time, ${SERVER_NEW_CONNECTIONS} on new connections, then ${run2.serverSamples} measured requests per side over ${SERVER_CONNECTIONS} kept-alive connections`
     );
@@ -106555,13 +106593,14 @@ async function measureServer(run2) {
           closeConnection(pools[side][i]);
           pools[side][i] = keptAliveConnection();
         },
-        log: run2.log
+        log: run2.log,
+        parallel: run2.parallel
       });
       out.set(page.path, samples);
     } finally {
       for (const connection of [...pools.base, ...pools.head]) closeConnection(connection);
     }
-  }
+  });
   return out;
 }
 async function measureVitals(run2) {
@@ -106575,19 +106614,20 @@ async function measureVitals(run2) {
   if (run2.prodUrl) sides.push({ name: "prod", url: run2.prodUrl, context: true });
   const server = await measureServer(run2);
   const browser = await chromium.launch({ headless: true, executablePath: run2.executablePath });
-  const results = [];
   try {
     log3(`Chrome ${browser.version()}`);
     await sendHeaders(browser, run2.headers, sides.map((s) => new URL(s.url).origin));
     const measure = (url3, page) => measureLoad(browser, url3, { device, interaction: page.interaction, settleMs: SETTLE_MS, idleTimeoutMs: IDLE_TIMEOUT_MS });
     const cold = sides.filter((s) => !s.context);
     log3(`Warming up ${cold.map((s) => s.name).join(" and ")}`);
-    await warmUp({ page: pages[0], sides: cold, measure, log: log3 });
-    for (const page of pages) {
+    await warmUp({ page: pages[0], sides: cold, measure, log: log3, parallel: run2.parallel });
+    const atOnce = browserPathsAtOnce(pathsAtOnce(run2), availableParallelism());
+    if (atOnce < pathsAtOnce(run2)) log3(`parallel-pages is ${run2.parallelPages}, but this runner has ${availableParallelism()} CPUs, so ${atOnce} at a time`);
+    const results = await inPool(pages, atOnce, async (page) => {
       log3(`${page.path}: ${rounds} rounds of main and PR${prodLoads && page.prod ? `, ${prodLoads} prod loads` : ""}`);
-      const { samples, failures } = await samplePage({ page, sides, rounds, contextLoads: prodLoads ?? 0, measure, log: log3 });
-      results.push({ path: page.path, loads: samples, failures, server: server.get(page.path) ?? null });
-    }
+      const { samples, failures } = await samplePage({ page, sides, rounds, contextLoads: prodLoads ?? 0, measure, log: log3, parallel: run2.parallel });
+      return { path: page.path, loads: samples, failures, server: server.get(page.path) ?? null };
+    });
     return { pages: results, prodLoads };
   } finally {
     await browser.close();
@@ -106662,6 +106702,8 @@ async function run(env = process.env) {
       serverSamples: inputs.serverSamples,
       device: inputs.device,
       headers: inputs.headers,
+      parallel: inputs.parallel,
+      parallelPages: inputs.parallelPages,
       log: log2
     });
     result = buildResult({

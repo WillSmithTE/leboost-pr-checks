@@ -81,5 +81,7 @@ export const COLD = { factor: 3, plusMs: 300, maxShare: 0.1 }
 
 export const DEFAULT_ALPHA = 0.05
 export const DEFAULT_PROD_LOADS = 3
+// Paths measured at once in parallel mode, each loading main and the PR together.
+export const DEFAULT_PARALLEL_PAGES = 1
 export const SETTLE_MS = 500
 export const IDLE_TIMEOUT_MS = 2000

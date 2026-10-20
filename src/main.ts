@@ -89,6 +89,8 @@ export async function run(env: Env = process.env): Promise<void> {
 			serverSamples: inputs.serverSamples,
 			device: inputs.device,
 			headers: inputs.headers,
+			parallel: inputs.parallel,
+			parallelPages: inputs.parallelPages,
 			log,
 		})
 		result = buildResult({

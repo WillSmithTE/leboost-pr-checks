@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextRounds, joinUrl, type Metrics, roundOrder, type Side, samplePage, warmUp } from '../src/run'
+import { contextRounds, inPool, joinUrl, type Metrics, roundOrder, type Side, samplePage, warmUp } from '../src/run'
 
 const sides: Side[] = [
 	{ name: 'base', url: 'https://main.test' },
@@ -64,6 +64,58 @@ describe('samplePage', () => {
 		expect(calls).toHaveLength(8)
 		expect(samples).toEqual({ base: [{}, {}, {}, {}], head: [{}, {}, {}, {}] })
 		expect(failures).toEqual({ base: [], head: [] })
+	})
+})
+
+describe('samplePage in parallel', () => {
+	it('starts every side of a round together, in the rotated order, and pairs loads by round', async () => {
+		const started: string[] = []
+		let inFlight = 0
+		let most = 0
+		const measure = async (url: string): Promise<Metrics> => {
+			const side = url.includes('main') ? 'b' : url.includes('prod') ? 'P' : 'h'
+			started.push(side)
+			inFlight++
+			most = Math.max(most, inFlight)
+			const n = started.length
+			// Main finishes last, so results must not be pushed in finish order.
+			await new Promise(r => setTimeout(r, side === 'b' ? 10 : 1))
+			inFlight--
+			if (side === 'h' && n === 2) throw new Error('HTTP 500')
+			return { LCP: n }
+		}
+		const { samples, failures } = await samplePage({
+			page: { path: '/', interaction: null, prod: true },
+			sides: [base, head, { ...prod, context: true }],
+			rounds: 4,
+			contextLoads: 2,
+			measure,
+			log: quiet,
+			parallel: true,
+		})
+		expect(started.join(' ')).toBe('b h P h b b h h P b')
+		expect(most).toBe(3)
+		expect(samples.head).toHaveLength(4)
+		expect(samples.head[0]).toBeNull()
+		expect(samples.base.map(m => m?.LCP)).toEqual([1, 5, 6, 10])
+		expect(samples.prod).toHaveLength(2)
+		expect(failures.head).toEqual(['HTTP 500'])
+	})
+})
+
+describe('inPool', () => {
+	it('keeps at most limit in flight and returns results in item order', async () => {
+		let inFlight = 0
+		let most = 0
+		const out = await inPool([30, 5, 20, 1, 10], 2, async ms => {
+			inFlight++
+			most = Math.max(most, inFlight)
+			await new Promise(r => setTimeout(r, ms))
+			inFlight--
+			return ms * 2
+		})
+		expect(out).toEqual([60, 10, 40, 2, 20])
+		expect(most).toBe(2)
 	})
 })
 

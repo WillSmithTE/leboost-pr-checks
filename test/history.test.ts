@@ -37,11 +37,12 @@ function zip(name: string, content: string, method: 0 | 8 = 8): Uint8Array<Array
 }
 
 // The parts of vitals.json the history reads.
-const vitals = (lcp: number, device = 'mobile') =>
+// A null width leaves it out, as runs before v0.8 did.
+const vitals = (lcp: number, device = 'mobile', viewportWidth: number | null = 390) =>
 	JSON.stringify({
 		version: 1,
 		baseUrl: SETUP.baseUrl,
-		config: { device },
+		config: { device, viewportWidth: viewportWidth ?? undefined },
 		pages: [{ path: '/', metrics: { LCP: { summary: { baseMedian: lcp } }, CLS: { summary: { baseMedian: 0 } } } }],
 	})
 
@@ -81,6 +82,12 @@ describe('readMedians', () => {
 		expect(readMedians(JSON.parse(vitals(2400, 'desktop')), 'mobile')).toBeNull()
 		expect(readMedians({ version: 2, config: { device: 'mobile' }, pages: [{ path: '/' }] }, 'mobile')).toBeNull()
 		expect(readMedians(null, 'mobile')).toBeNull()
+	})
+
+	it('refuses a run at another viewport width, reading runs from before the width was stored as the old one', () => {
+		expect(readMedians(JSON.parse(vitals(2400, 'mobile', 412)), 'mobile')).toBeNull()
+		expect(readMedians(JSON.parse(vitals(2400, 'mobile', null)), 'mobile')).toBeNull()
+		expect(readMedians(JSON.parse(vitals(2400, 'desktop', null)), 'desktop')).toEqual({ '/': { LCP: 2400, CLS: 0 } })
 	})
 })
 
@@ -190,7 +197,7 @@ const result = (pages: RunResult['pages']): RunResult => ({
 	headUrl: 'https://pr.app.test',
 	prodUrl: null,
 	ciRunUrl: null,
-	config: { pairs: 8, serverRequests: 30, device: 'mobile', latencyMs: 150, downloadKbps: 1638.4, uploadKbps: 750, cpuSlowdown: 4 },
+	config: { pairs: 8, serverRequests: 30, device: 'mobile', viewportWidth: 390, latencyMs: 150, downloadKbps: 1638.4, uploadKbps: 750, cpuSlowdown: 4 },
 	pages,
 	bundle: null,
 	meta: { alpha: 0.05, prodLoads: null, durationMs: null, generatedAt: null },

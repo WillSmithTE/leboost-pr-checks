@@ -17,11 +17,12 @@ export interface Device {
 
 export type DeviceName = 'mobile' | 'desktop'
 
-// Lighthouse's nominal mobile (Slow 4G, Moto G Power) and desktop profiles, applied as CDP request-level throttling.
+// Lighthouse's nominal mobile (Slow 4G, 4x CPU) and desktop profiles, applied as CDP request-level throttling. Mobile uses
+// the most common phone width (390, iPhone 12 to 16) instead of Lighthouse's 412, where more layouts wrap and shift.
 export const DEVICES: Record<DeviceName, Device> = {
 	mobile: {
-		viewport: { width: 412, height: 823 },
-		deviceScaleFactor: 1.75,
+		viewport: { width: 390, height: 844 },
+		deviceScaleFactor: 3,
 		isMobile: true,
 		hasTouch: true,
 		userAgent:

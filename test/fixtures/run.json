@@ -9,7 +9,7 @@
     "headUrl": "https://shop-preview-pr-42.example.workers.dev",
     "prodUrl": "https://shop.example.com",
     "ciRunUrl": "https://github.com/acme/shop/actions/runs/123456",
-    "config": { "pairs": 6, "device": "mobile", "latencyMs": 150, "downloadKbps": 1638.4, "uploadKbps": 750, "cpuSlowdown": 4 },
+    "config": { "pairs": 6, "device": "mobile", "viewportWidth": 390, "latencyMs": 150, "downloadKbps": 1638.4, "uploadKbps": 750, "cpuSlowdown": 4 },
     "alpha": 0.05
   },
   "pages": [

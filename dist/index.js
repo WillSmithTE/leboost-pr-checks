@@ -61695,8 +61695,8 @@ var METRICS = ["LCP", "FCP", "CLS", "TBT", "TTFB", "Server", "INP"];
 var LOAD_METRICS = METRICS.filter((m) => m !== "Server");
 var DEVICES = {
   mobile: {
-    viewport: { width: 412, height: 823 },
-    deviceScaleFactor: 1.75,
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
     userAgent: "Mozilla/5.0 (Linux; Android 11; moto g power (2022)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36",
@@ -61985,8 +61985,11 @@ function readZipEntry(zip, name) {
   }
   return null;
 }
+var LEGACY_WIDTH = { mobile: 412, desktop: 1350 };
 function readMedians(json, device) {
   if (at(json, "version") !== 1 || at(json, "config", "device") !== device) return null;
+  const width = at(json, "config", "viewportWidth") ?? LEGACY_WIDTH[device];
+  if (width !== DEVICES[device].viewport.width) return null;
   const pages = at(json, "pages");
   if (!Array.isArray(pages)) return null;
   const medians = {};
@@ -106720,6 +106723,7 @@ async function run(env = process.env) {
         pairs: inputs.rounds,
         serverRequests: inputs.serverSamples,
         device: inputs.device,
+        viewportWidth: device.viewport.width,
         latencyMs: device.network.latencyMs,
         downloadKbps: device.network.downloadKbps,
         uploadKbps: device.network.uploadKbps,

@@ -111,6 +111,7 @@ export interface RunConfig {
 	// Server time requests per side and page, 0 when turned off.
 	serverRequests: number
 	device: DeviceName
+	viewportWidth: number
 	latencyMs: number
 	downloadKbps: number
 	uploadKbps: number

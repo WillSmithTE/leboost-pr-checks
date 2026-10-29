@@ -106,7 +106,8 @@ what to fix. A preview that is down or a load that times out is reported in the 
 Every run saves its `vitals.json` as a workflow artifact named `usero-pr-checks-<device>-<hash of base-url>`, kept for
 your repository's artifact retention (90 days by default). The next run lists those artifacts with the job's token (this
 is why it needs `actions: read`), downloads up to 20 of the newest, and takes main's median per page and metric from each.
-This run's main is the newest point. Runs on another device or base URL are never mixed in.
+This run's main is the newest point. Runs on another device, base URL or viewport width are never mixed in, so mobile runs
+from before v0.8 (412 wide) are skipped and the mobile chart starts over at 390.
 
 - The chart appears once three runs have a value, so the first two runs of a new setup have none.
 - No history, no permission or a GitHub API error means no chart, never a failed step. The log says which, in one line.
@@ -397,8 +398,10 @@ the `CHROME_BIN` environment variable.
 ## Method
 
 **Each load is cold.** A fresh browser context per load (empty cache, no cookies, no service worker) in one headless Chrome.
-The mobile profile is Lighthouse's: Moto G Power viewport, 150 ms latency, 1.6 Mbps down, 750 Kbps up and 4x CPU slowdown,
-applied through the Chrome DevTools Protocol. Chrome applies that latency to every request except the HTML document itself,
+The mobile profile is Lighthouse's network and CPU (150 ms latency, 1.6 Mbps down, 750 Kbps up and 4x CPU slowdown) on a
+390x844 phone viewport at 3x pixel density (iPhone 12 to 16), applied through the Chrome DevTools Protocol. Since v0.8 the
+width is 390, the most common phone width, instead of Lighthouse's 412 (Moto G Power): more rows wrap at 390, so layout
+shifts that depend on where text wraps (a web font arriving, say) show up in CLS. Chrome applies that latency to every request except the HTML document itself,
 so TTFB is the server's real response time. Absolute numbers are not PageSpeed scores (DevTools throttling is gentler per
 request than Lighthouse's, and 4x on a shared CI runner is slower than 4x on a laptop). The action only compares two sides
 measured the same way in the same job.

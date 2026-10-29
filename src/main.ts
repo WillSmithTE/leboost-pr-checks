@@ -107,6 +107,7 @@ export async function run(env: Env = process.env): Promise<void> {
 				pairs: inputs.rounds,
 				serverRequests: inputs.serverSamples,
 				device: inputs.device,
+				viewportWidth: device.viewport.width,
 				latencyMs: device.network.latencyMs,
 				downloadKbps: device.network.downloadKbps,
 				uploadKbps: device.network.uploadKbps,

@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { inflateRawSync } from 'node:zlib'
 import type { History } from './chart'
-import { type DeviceName, METRICS, type MetricName } from './config'
+import { DEVICES, type DeviceName, METRICS, type MetricName } from './config'
 import { at, type GitHubApi, isRecord, posInt, str } from './github'
 import type { RunResult } from './report'
 
@@ -78,9 +78,14 @@ function readZipEntry(zip: Uint8Array, name: string): Uint8Array | null {
 	return null
 }
 
+// Runs before v0.8 stored no viewport width; mobile was 412 wide then.
+const LEGACY_WIDTH: Record<DeviceName, number> = { mobile: 412, desktop: 1350 }
+
 // main's medians from a past vitals.json, or null when it was measured some other way and is not comparable.
 export function readMedians(json: unknown, device: DeviceName): RunMedians | null {
 	if (at(json, 'version') !== 1 || at(json, 'config', 'device') !== device) return null
+	const width = at(json, 'config', 'viewportWidth') ?? LEGACY_WIDTH[device]
+	if (width !== DEVICES[device].viewport.width) return null
 	const pages = at(json, 'pages')
 	if (!Array.isArray(pages)) return null
 	const medians: RunMedians = {}

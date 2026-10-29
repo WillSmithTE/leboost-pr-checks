@@ -1,6 +1,6 @@
 {
   "name": "usero-pr-checks",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Lab web vitals for every pull request: the PR preview against main, with a significance test, as a PR comment.",
   "license": "MIT",
